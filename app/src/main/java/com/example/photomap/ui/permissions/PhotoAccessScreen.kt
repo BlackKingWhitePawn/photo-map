@@ -71,7 +71,8 @@ fun PhotoAccessRoute(
             viewModel.onPermissionsRequested()
             permissionLauncher.launch(PhotoPermissionManager.permissionsToRequest())
         },
-        onScan = viewModel::scanPhotos,
+        onScan = { viewModel.scanPhotos() },
+        onScanWithExif = viewModel::scanPhotosWithExif,
         onOpenMap = onOpenMap,
         onOpenSettings = {
             val intent = Intent(
@@ -88,6 +89,7 @@ fun PhotoAccessScreen(
     state: PhotoAccessUiState,
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
+    onScanWithExif: () -> Unit,
     onOpenMap: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -108,6 +110,7 @@ fun PhotoAccessScreen(
                 state = state,
                 onRequestPermissions = onRequestPermissions,
                 onScan = onScan,
+                onScanWithExif = onScanWithExif,
                 onOpenMap = onOpenMap,
                 onOpenSettings = onOpenSettings
             )
@@ -118,7 +121,7 @@ fun PhotoAccessScreen(
                 ) {
                     CircularProgressIndicator()
                     Text(
-                        text = "Читаем фотографии из MediaStore",
+                        text = state.loadingText(),
                         style = MaterialTheme.typography.bodyLarge
                     )
                 }
@@ -133,7 +136,7 @@ fun PhotoAccessScreen(
             }
 
             Text(
-                text = "Найдено фотографий: ${state.photos.size}, с координатами: ${state.photos.count { it.hasLocation }}",
+                text = "Найдено фотографий: ${state.photos.size}, с координатами: ${state.photosWithLocationCount}",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -163,6 +166,7 @@ private fun PermissionSummaryCard(
     state: PhotoAccessUiState,
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
+    onScanWithExif: () -> Unit,
     onOpenMap: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -223,7 +227,15 @@ private fun PermissionSummaryCard(
                     onClick = onScan,
                     enabled = state.permissionStatus.canReadImages && !state.isLoading
                 ) {
-                    Text(text = "Сканировать")
+                    Text(text = "Обновить список")
+                }
+
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onScanWithExif,
+                    enabled = state.permissionStatus.canReadImages && !state.isLoading
+                ) {
+                    Text(text = "Искать GPS в EXIF")
                 }
 
                 OutlinedButton(
@@ -289,6 +301,15 @@ private fun accessDescription(accessLevel: PhotoAccessLevel): String {
         PhotoAccessLevel.None -> "Доступ к фотографиям не выдан"
         PhotoAccessLevel.Limited -> "Доступ выдан только к выбранным фотографиям"
         PhotoAccessLevel.Full -> "Доступ ко всем фотографиям выдан"
+    }
+}
+
+private fun PhotoAccessUiState.loadingText(): String {
+    val message = loadingMessage ?: "Читаем фотографии из MediaStore"
+    return if (scanTotal > 0) {
+        "$message\nОбработано $scanProcessed из $scanTotal"
+    } else {
+        message
     }
 }
 

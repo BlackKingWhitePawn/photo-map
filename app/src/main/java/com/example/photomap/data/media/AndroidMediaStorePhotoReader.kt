@@ -22,9 +22,13 @@ class AndroidMediaStorePhotoReader(
     private val contentResolver: ContentResolver = context.applicationContext.contentResolver
     private val exifLocationReader = ExifLocationReader(contentResolver)
 
-    override suspend fun readPhotos(): List<DevicePhoto> = withContext(ioDispatcher) {
+    override suspend fun readPhotos(
+        readExifLocation: Boolean,
+        onProgress: (processed: Int, total: Int) -> Unit
+    ): List<DevicePhoto> = withContext(ioDispatcher) {
         val photos = mutableListOf<DevicePhoto>()
-        val canReadOriginalLocation = PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
+        val canReadOriginalLocation = readExifLocation &&
+            PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
 
         try {
             contentResolver.query(
@@ -34,15 +38,20 @@ class AndroidMediaStorePhotoReader(
                 null,
                 "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
             )?.use { cursor ->
+                val total = cursor.count
+                var processed = 0
+                onProgress(processed, total)
+
                 while (cursor.moveToNext()) {
                     val photo = cursor.toDevicePhoto(
+                        readExifLocation = readExifLocation,
                         canReadOriginalLocation = canReadOriginalLocation
                     )
                     photos += photo
-                    Log.d(
-                        Tag,
-                        "MediaStore photo: id=${photo.mediaId}, name=${photo.displayName}, uri=${photo.uri}, hasLocation=${photo.hasLocation}"
-                    )
+                    processed += 1
+                    if (processed % ProgressBatchSize == 0 || processed == total) {
+                        onProgress(processed, total)
+                    }
                 }
             }
         } catch (securityException: SecurityException) {
@@ -51,18 +60,28 @@ class AndroidMediaStorePhotoReader(
             Log.w(Tag, "Unable to read images from MediaStore", exception)
         }
 
-        Log.i(Tag, "MediaStore scan finished: ${photos.size} photos")
+        Log.i(
+            Tag,
+            "MediaStore scan finished: ${photos.size} photos, withLocation=${photos.count { it.hasLocation }}, readExifLocation=$readExifLocation"
+        )
         photos
     }
 
-    private fun Cursor.toDevicePhoto(canReadOriginalLocation: Boolean): DevicePhoto {
+    private fun Cursor.toDevicePhoto(
+        readExifLocation: Boolean,
+        canReadOriginalLocation: Boolean
+    ): DevicePhoto {
         val id = getLongValue(MediaStore.Images.Media._ID) ?: error("MediaStore image row without _ID")
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
         val mediaStoreLocation = readMediaStoreLocation()
-        val location = mediaStoreLocation ?: exifLocationReader.readLocation(
-            uri = uri,
-            canReadOriginalLocation = canReadOriginalLocation
-        )
+        val location = mediaStoreLocation ?: if (readExifLocation) {
+            exifLocationReader.readLocation(
+                uri = uri,
+                canReadOriginalLocation = canReadOriginalLocation
+            )
+        } else {
+            null
+        }
 
         return DevicePhoto(
             mediaId = id,
@@ -128,5 +147,7 @@ class AndroidMediaStorePhotoReader(
             @Suppress("DEPRECATION")
             MediaStore.Images.Media.LONGITUDE
         )
+
+        const val ProgressBatchSize = 500
     }
 }

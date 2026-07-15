@@ -49,13 +49,14 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun scanPhotos() {
+    fun scanPhotos(readExifLocation: Boolean = false) {
         val status = PhotoPermissionManager.checkStatus(getApplication())
         if (!status.canReadImages) {
             _uiState.update { state ->
                 state.copy(
                     permissionStatus = status,
                     isLoading = false,
+                    loadingMessage = null,
                     errorMessage = "Нет доступа к фотографиям"
                 )
             }
@@ -67,19 +68,39 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 state.copy(
                     permissionStatus = status,
                     isLoading = true,
+                    loadingMessage = if (readExifLocation) {
+                        "Ищем GPS-координаты в EXIF. На большой галерее это может занять несколько минут."
+                    } else {
+                        "Быстро читаем список фотографий из MediaStore"
+                    },
+                    scanProcessed = 0,
+                    scanTotal = 0,
                     errorMessage = null
                 )
             }
 
-            val photos = photoReader.readPhotos()
+            val photos = photoReader.readPhotos(readExifLocation = readExifLocation) { processed, total ->
+                _uiState.update { state ->
+                    state.copy(
+                        scanProcessed = processed,
+                        scanTotal = total
+                    )
+                }
+            }
 
             _uiState.update { state ->
                 state.copy(
                     permissionStatus = PhotoPermissionManager.checkStatus(getApplication()),
                     photos = photos,
-                    isLoading = false
+                    photosWithLocationCount = photos.count { photo -> photo.hasLocation },
+                    isLoading = false,
+                    loadingMessage = null
                 )
             }
         }
+    }
+
+    fun scanPhotosWithExif() {
+        scanPhotos(readExifLocation = true)
     }
 }

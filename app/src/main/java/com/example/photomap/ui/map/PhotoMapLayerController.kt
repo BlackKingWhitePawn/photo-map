@@ -5,7 +5,6 @@ import com.example.photomap.core.settings.PhotoClusterSettings
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression.color
 import org.maplibre.android.style.expressions.Expression.get
-import org.maplibre.android.style.expressions.Expression.has
 import org.maplibre.android.style.expressions.Expression.step
 import org.maplibre.android.style.expressions.Expression.stop
 import org.maplibre.android.style.expressions.Expression.toString as expressionToString
@@ -129,7 +128,6 @@ private fun Style.recreatePhotoMapLayers(
 
     addLayer(
         CircleLayer(PHOTO_CLUSTER_LAYER_ID, PHOTO_MAP_SOURCE_ID)
-            .withFilter(has(PHOTO_CLUSTER_COUNT_PROPERTY))
             .withProperties(
                 circleRadius(
                     step(
@@ -157,7 +155,6 @@ private fun Style.recreatePhotoMapLayers(
 
     addLayer(
         SymbolLayer(PHOTO_CLUSTER_COUNT_LAYER_ID, PHOTO_MAP_SOURCE_ID)
-            .withFilter(has(PHOTO_CLUSTER_COUNT_PROPERTY))
             .withProperties(
                 textField(expressionToString(get(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY))),
                 textSize(14f * sourceKey.markerScale.coerceAtMost(1.4f)),

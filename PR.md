@@ -1,33 +1,37 @@
-# PR: Bootstrap Android project for Photo Map v0.1.0
+# PR: Permissions and MediaStore photo reading
 
 ## Summary
 
-* Initialized the Android project baseline for `Photo Map`.
-* Added release, branch, changelog, and APK storage rules.
-* Set the first app version to `0.1.0`.
-* Prepared release notes for `v0.1.0`.
+* Added Android photo permissions for Android 10-14+.
+* Added `ACCESS_MEDIA_LOCATION` request for future original GPS metadata access.
+* Added a MediaStore reader that loads image metadata through `ContentResolver`.
+* Added `DevicePhoto` domain model.
+* Added a Russian Compose screen for requesting access, showing permission state, scanning photos, and opening app settings.
+* Kept MediaStore access outside `MainActivity` and outside direct ViewModel calls to `ContentResolver`.
 
-## Release
+## Scope
 
-Target tag after merge:
+This PR covers stage 2: permissions and MediaStore.
 
-```text
-v0.1.0
-```
+Not included:
 
-Expected APK asset name:
-
-```text
-photomap-v0.1.0.apk
-```
-
-The existing signed APK was generated before `versionName` was changed to `0.1.0`, so it should be rebuilt once in Android Studio before uploading it to GitHub Releases.
+* Room index.
+* EXIF parsing.
+* Map and clustering.
+* Gallery grid with Coil.
+* Fullscreen viewer.
+* WorkManager background scan.
 
 ## Checks
 
-Not run by Codex for this request.
+Not run by Codex yet in this branch.
 
-## Known Limitations
+## Manual Review Notes
 
-* This is a bootstrap release only.
-* MediaStore, permissions, Room indexing, map, gallery, viewer, and background scanning are not implemented yet.
+On a device or emulator with photos:
+
+1. Launch the app.
+2. Tap `Предоставить доступ`.
+3. Grant full or selected photo access.
+4. Confirm the screen shows the number of found photos.
+5. Check Logcat tag `PhotoMapMediaStore` for scanned photo entries.

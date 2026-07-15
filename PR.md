@@ -26,7 +26,7 @@ Not included:
 ## Checks
 
 * `.\gradlew.bat assembleDebug` - passed.
-* Debug APK metadata inspected: `versionCode=4`, `versionName=0.3.1`.
+* Debug APK metadata inspected: `versionCode=5`, `versionName=0.4.0`.
 * APK permissions inspected with `aapt2 dump permissions`.
 * Source checked for MediaStore delete/write operations.
 
@@ -67,7 +67,7 @@ The map keeps the existing MapLibre/OpenFreeMap setup and consumes the same `Dev
 
 ## Release
 
-No release APK is prepared in this branch. If this branch is released separately after merge, use:
+Target release:
 
 ```text
 v0.4.0

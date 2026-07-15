@@ -24,7 +24,13 @@ Not included:
 
 ## Checks
 
-Not run by Codex yet in this branch.
+* `.\gradlew.bat assembleDebug` - passed.
+
+The command was run with `JAVA_HOME` set to Android Studio JBR for the current process:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+```
 
 ## Manual Review Notes
 

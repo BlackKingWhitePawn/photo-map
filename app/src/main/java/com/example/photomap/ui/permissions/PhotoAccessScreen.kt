@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -112,11 +113,7 @@ fun PhotoAccessScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "Photo Map",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            PhotoAccessTopBar(onOpenAppSettings = onOpenAppSettings)
 
             PermissionSummaryCard(
                 state = state,
@@ -182,6 +179,35 @@ fun PhotoAccessScreen(
                 ) { photo ->
                     PhotoRow(photo = photo)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoAccessTopBar(
+    onOpenAppSettings: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Photo Map",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            OutlinedButton(onClick = onOpenAppSettings) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_settings_24),
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+                Text(text = "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")
             }
         }
     }

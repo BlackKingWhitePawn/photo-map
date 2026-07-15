@@ -1025,7 +1025,7 @@ MVP считается готовым, если:
 
 ## 33. Codex local workflow notes
 
-1. After code patches, always run a compile check and fix compilation errors before finishing.
+1. Do not run build or compile checks after code patches unless the user explicitly asks for them.
 2. Do not run tests, npx, tsc, or eslint unless the user explicitly changes this rule.
 
 ## 34. Codex release workflow notes

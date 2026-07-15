@@ -15,9 +15,11 @@ data class PhotoAccessUiState(
     val indexedLocationScannedCount: Int = 0,
     val indexedPhotoCount: Int = 0,
     val isLoading: Boolean = false,
+    val isScanPaused: Boolean = false,
     val loadingMessage: String? = null,
     val scanProcessed: Int = 0,
     val scanTotal: Int = 0,
+    val heatmapThumbnailThreshold: Int = 8,
     val hasRequestedPermissions: Boolean = false,
     val errorMessage: String? = null
 )

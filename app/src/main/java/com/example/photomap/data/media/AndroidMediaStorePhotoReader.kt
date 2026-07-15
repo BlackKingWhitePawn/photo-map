@@ -15,8 +15,11 @@ import com.example.photomap.data.local.PhotoIndexDatabase
 import com.example.photomap.data.local.toDevicePhoto
 import com.example.photomap.data.local.toIndexedPhoto
 import com.example.photomap.domain.model.DevicePhoto
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 class AndroidMediaStorePhotoReader(
@@ -30,6 +33,8 @@ class AndroidMediaStorePhotoReader(
 
     override suspend fun readPhotos(
         readExifLocation: Boolean,
+        scanControl: PhotoReadControl,
+        onBatchIndexed: (List<DevicePhoto>) -> Unit,
         onProgress: (PhotoReadProgress) -> Unit
     ): PhotoReadResult = withContext(ioDispatcher) {
         val photos = mutableListOf<DevicePhoto>()
@@ -57,6 +62,17 @@ class AndroidMediaStorePhotoReader(
             }
         }
 
+        fun persistBatch() {
+            if (photosToPersist.isEmpty()) {
+                return
+            }
+
+            val indexedBatch = photosToPersist.toList()
+            photoIndexDatabase.upsertPhotos(indexedBatch)
+            photosToPersist.clear()
+            onBatchIndexed(indexedBatch.map { photo -> photo.toDevicePhoto() })
+        }
+
         try {
             contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -70,6 +86,10 @@ class AndroidMediaStorePhotoReader(
                 reportProgress(processed = processed, total = total, force = true)
 
                 while (cursor.moveToNext()) {
+                    currentCoroutineContext().ensureActive()
+                    scanControl.awaitIfPaused()
+                    currentCoroutineContext().ensureActive()
+
                     val currentPhoto = cursor.toDevicePhotoMetadata()
                     currentMediaIds += currentPhoto.mediaId
 
@@ -88,17 +108,17 @@ class AndroidMediaStorePhotoReader(
                     }
 
                     if (photosToPersist.size >= PersistBatchSize) {
-                        photoIndexDatabase.upsertPhotos(photosToPersist)
-                        photosToPersist.clear()
+                        persistBatch()
                     }
 
                     reportProgress(processed = processed, total = total, force = processed == total)
                 }
 
-                photoIndexDatabase.upsertPhotos(photosToPersist)
-                photosToPersist.clear()
+                persistBatch()
                 photoIndexDatabase.deleteMissingPhotos(currentMediaIds)
             }
+        } catch (cancellationException: CancellationException) {
+            throw cancellationException
         } catch (securityException: SecurityException) {
             Log.w(Tag, "No permission to read images from MediaStore", securityException)
         } catch (exception: RuntimeException) {
@@ -113,6 +133,13 @@ class AndroidMediaStorePhotoReader(
             photos = photos,
             indexStats = photoIndexDatabase.getStats()
         )
+    }
+
+    override suspend fun readIndexedPhotos(): List<DevicePhoto> = withContext(ioDispatcher) {
+        photoIndexDatabase.getAllPhotosById()
+            .values
+            .map { photo -> photo.toDevicePhoto() }
+            .sortedByNewestFirst()
     }
 
     override suspend fun getIndexStats(): PhotoIndexStats = withContext(ioDispatcher) {
@@ -224,4 +251,12 @@ class AndroidMediaStorePhotoReader(
         const val PersistBatchSize = 50
         const val ProgressReportIntervalMs = 100L
     }
+}
+
+private fun List<DevicePhoto>.sortedByNewestFirst(): List<DevicePhoto> {
+    return sortedWith(
+        compareByDescending<DevicePhoto> { photo ->
+            photo.dateTaken ?: photo.dateModified ?: photo.dateAdded ?: 0L
+        }.thenByDescending { photo -> photo.mediaId }
+    )
 }

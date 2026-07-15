@@ -7,5 +7,12 @@ data class PhotoMapMarker(
     val title: String,
     val snippet: String,
     val position: LatLng,
-    val count: Int
+    val count: Int,
+    val thumbnailUri: String?,
+    val type: PhotoMapMarkerType
 )
+
+enum class PhotoMapMarkerType {
+    Heat,
+    Thumbnail
+}

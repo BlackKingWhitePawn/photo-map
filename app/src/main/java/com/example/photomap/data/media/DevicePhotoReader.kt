@@ -5,10 +5,22 @@ import com.example.photomap.domain.model.DevicePhoto
 interface DevicePhotoReader {
     suspend fun readPhotos(
         readExifLocation: Boolean,
+        scanControl: PhotoReadControl = PhotoReadControl.None,
+        onBatchIndexed: (List<DevicePhoto>) -> Unit = {},
         onProgress: (PhotoReadProgress) -> Unit = {}
     ): PhotoReadResult
 
+    suspend fun readIndexedPhotos(): List<DevicePhoto>
+
     suspend fun getIndexStats(): PhotoIndexStats
+}
+
+interface PhotoReadControl {
+    suspend fun awaitIfPaused()
+
+    object None : PhotoReadControl {
+        override suspend fun awaitIfPaused() = Unit
+    }
 }
 
 data class PhotoReadProgress(

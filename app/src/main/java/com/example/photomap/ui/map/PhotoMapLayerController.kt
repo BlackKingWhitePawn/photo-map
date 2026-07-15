@@ -3,11 +3,6 @@ package com.example.photomap.ui.map
 import android.util.Log
 import com.example.photomap.core.settings.PhotoClusterSettings
 import org.maplibre.android.maps.Style
-import org.maplibre.android.style.expressions.Expression.color
-import org.maplibre.android.style.expressions.Expression.get
-import org.maplibre.android.style.expressions.Expression.step
-import org.maplibre.android.style.expressions.Expression.stop
-import org.maplibre.android.style.expressions.Expression.toString as expressionToString
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
 import org.maplibre.android.style.layers.PropertyFactory.circleOpacity
@@ -129,24 +124,8 @@ private fun Style.recreatePhotoMapLayers(
     addLayer(
         CircleLayer(PHOTO_CLUSTER_LAYER_ID, PHOTO_MAP_SOURCE_ID)
             .withProperties(
-                circleRadius(
-                    step(
-                        get(PHOTO_CLUSTER_COUNT_PROPERTY),
-                        24f * sourceKey.markerScale,
-                        stop(10, 32f * sourceKey.markerScale),
-                        stop(50, 42f * sourceKey.markerScale),
-                        stop(200, 54f * sourceKey.markerScale)
-                    )
-                ),
-                circleColor(
-                    step(
-                        get(PHOTO_CLUSTER_COUNT_PROPERTY),
-                        color(colors.clusterSmall),
-                        stop(10, color(colors.clusterMedium)),
-                        stop(50, color(colors.clusterLarge)),
-                        stop(200, color(colors.clusterHuge))
-                    )
-                ),
+                circleRadius(36f * sourceKey.markerScale),
+                circleColor(colors.clusterSmall),
                 circleOpacity(0.92f),
                 circleStrokeColor(colors.photoStroke),
                 circleStrokeWidth(3f)
@@ -156,7 +135,7 @@ private fun Style.recreatePhotoMapLayers(
     addLayer(
         SymbolLayer(PHOTO_CLUSTER_COUNT_LAYER_ID, PHOTO_MAP_SOURCE_ID)
             .withProperties(
-                textField(expressionToString(get(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY))),
+                textField("{$PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY}"),
                 textSize(14f * sourceKey.markerScale.coerceAtMost(1.4f)),
                 textColor(colors.clusterText),
                 textHaloColor(colors.clusterTextHalo),
@@ -190,15 +169,7 @@ private fun Style.recreatePhotoMapLayers(
 
 private fun Style.updatePhotoMapLayerColors(colors: PhotoMapLayerColors) {
     getLayerAs<CircleLayer>(PHOTO_CLUSTER_LAYER_ID)?.setProperties(
-        circleColor(
-            step(
-                get(PHOTO_CLUSTER_COUNT_PROPERTY),
-                color(colors.clusterSmall),
-                stop(10, color(colors.clusterMedium)),
-                stop(50, color(colors.clusterLarge)),
-                stop(200, color(colors.clusterHuge))
-            )
-        ),
+        circleColor(colors.clusterSmall),
         circleStrokeColor(colors.photoStroke)
     )
     getLayerAs<SymbolLayer>(PHOTO_CLUSTER_COUNT_LAYER_ID)?.setProperties(

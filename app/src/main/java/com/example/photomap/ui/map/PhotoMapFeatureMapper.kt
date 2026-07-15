@@ -55,8 +55,8 @@ internal const val CONTENT_URI_PROPERTY = "content_uri"
 internal const val PHOTO_THUMBNAIL_KEY_PROPERTY = "thumbnail_key"
 internal const val TAKEN_AT_PROPERTY = "taken_at"
 internal const val PHOTO_CLUSTER_ID_PROPERTY = "cluster_id"
-internal const val PHOTO_CLUSTER_COUNT_PROPERTY = "point_count"
-internal const val PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY = "point_count_abbreviated"
+internal const val PHOTO_CLUSTER_COUNT_PROPERTY = "photo_count"
+internal const val PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY = "photo_count_label"
 
 internal fun photoThumbnailImageKey(photoId: Long): String {
     return "photo-thumb-$photoId"

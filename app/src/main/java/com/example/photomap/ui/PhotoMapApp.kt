@@ -29,7 +29,7 @@ fun PhotoMapApp(
             photos = state.photos,
             mapStyleUrl = BuildConfig.MAP_STYLE_URL,
             onBack = { currentScreen = AppScreen.Photos },
-            onScan = viewModel::scanPhotos
+            onScan = { viewModel.scanPhotos() }
         )
     }
 }

@@ -1,5 +1,11 @@
 package com.example.photomap.ui.map
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +37,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.photomap.domain.model.DevicePhoto
+import org.maplibre.android.annotations.Icon
+import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -160,6 +168,10 @@ private fun PhotoMapLibreMap(
     var isStyleReady by remember { mutableStateOf(false) }
     var zoomBucket by remember { mutableStateOf(DefaultZoomBucket) }
     var hasFitCamera by remember { mutableStateOf(false) }
+    var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
+    val clusterIconFactory = remember(context) {
+        ClusterIconFactory(context.applicationContext)
+    }
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply {
@@ -173,12 +185,15 @@ private fun PhotoMapLibreMap(
                 }
                 mapLibreMap.addOnCameraIdleListener {
                     zoomBucket = mapLibreMap.cameraPosition.zoom.toZoomBucket()
+                    visibleBounds = mapLibreMap.projection.visibleRegion.latLngBounds
                 }
             }
         }
     }
-    val markers = remember(photos, zoomBucket) {
-        photos.toMapMarkers(zoomBucket)
+    val markers = remember(photos, zoomBucket, visibleBounds) {
+        photos
+            .filterByBounds(visibleBounds)
+            .toMapMarkers(zoomBucket)
     }
     val cameraPositions = remember(photos) {
         photos.mapNotNull { photo ->
@@ -219,7 +234,8 @@ private fun PhotoMapLibreMap(
             mapLibreMap.renderMarkers(
                 markers = markers,
                 cameraPositions = cameraPositions,
-                fitCamera = !hasFitCamera
+                fitCamera = !hasFitCamera,
+                clusterIconFactory = clusterIconFactory
             )
         }
 
@@ -237,17 +253,22 @@ private fun PhotoMapLibreMap(
 private fun MapLibreMap.renderMarkers(
     markers: List<PhotoMapMarker>,
     cameraPositions: List<LatLng>,
-    fitCamera: Boolean
+    fitCamera: Boolean,
+    clusterIconFactory: ClusterIconFactory
 ) {
     clear()
 
     markers.forEach { marker ->
-        addMarker(
-            MarkerOptions()
-                .position(marker.position)
-                .title(marker.title)
-                .snippet(marker.snippet)
-        )
+        val options = MarkerOptions()
+            .position(marker.position)
+            .title(marker.title)
+            .snippet(marker.snippet)
+
+        if (marker.count > 1) {
+            options.icon(clusterIconFactory.iconFor(marker.count))
+        }
+
+        addMarker(options)
     }
 
     if (fitCamera) {
@@ -290,6 +311,18 @@ private fun String.isPoliticalBoundaryLayerId(): Boolean {
         BoundaryLayerTokens.any { token -> normalized.contains(token) }
 }
 
+private fun List<DevicePhoto>.filterByBounds(bounds: LatLngBounds?): List<DevicePhoto> {
+    if (bounds == null) {
+        return this
+    }
+
+    return filter { photo ->
+        val latitude = photo.latitude
+        val longitude = photo.longitude
+        latitude != null && longitude != null && bounds.contains(LatLng(latitude, longitude))
+    }
+}
+
 private fun List<DevicePhoto>.toMapMarkers(zoomBucket: Int): List<PhotoMapMarker> {
     return groupBy { photo ->
         val latitude = requireNotNull(photo.latitude)
@@ -320,6 +353,54 @@ private fun List<DevicePhoto>.toMapMarkers(zoomBucket: Int): List<PhotoMapMarker
     }
 }
 
+private class ClusterIconFactory(context: Context) {
+    private val iconFactory = IconFactory.getInstance(context)
+    private val cache = mutableMapOf<String, Icon>()
+
+    fun iconFor(count: Int): Icon {
+        val label = count.toClusterLabel()
+        return cache.getOrPut(label) {
+            iconFactory.fromBitmap(createClusterBitmap(label))
+        }
+    }
+
+    private fun createClusterBitmap(label: String): Bitmap {
+        val bitmap = Bitmap.createBitmap(ClusterIconSizePx, ClusterIconSizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(32, 104, 94)
+            style = Paint.Style.FILL
+        }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            strokeWidth = 5f
+            style = Paint.Style.STROKE
+        }
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = if (label.length <= 3) 28f else 23f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val center = ClusterIconSizePx / 2f
+        canvas.drawCircle(center, center, center - 5f, circlePaint)
+        canvas.drawCircle(center, center, center - 7f, strokePaint)
+
+        val textBounds = Rect()
+        textPaint.getTextBounds(label, 0, label.length, textBounds)
+        canvas.drawText(label, center, center - textBounds.exactCenterY(), textPaint)
+        return bitmap
+    }
+}
+
+private fun Int.toClusterLabel(): String {
+    return when {
+        this > 9999 -> "9999+"
+        this > 999 -> "${this / 1000}k"
+        else -> toString()
+    }
+}
+
 private fun Double.toZoomBucket(): Int {
     return when {
         this < 6.0 -> 1
@@ -340,6 +421,7 @@ private fun Int.cellSize(): Double {
 
 private const val DefaultZoomBucket = 1
 private const val MapBoundsPaddingPx = 120
+private const val ClusterIconSizePx = 88
 
 private const val LandFillColor = "#E7ECE6"
 

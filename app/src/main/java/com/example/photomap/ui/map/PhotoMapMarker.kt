@@ -1,5 +1,6 @@
 package com.example.photomap.ui.map
 
+import com.example.photomap.domain.model.DevicePhoto
 import org.maplibre.android.geometry.LatLng
 
 data class PhotoMapMarker(
@@ -9,10 +10,13 @@ data class PhotoMapMarker(
     val position: LatLng,
     val count: Int,
     val thumbnailUri: String?,
-    val type: PhotoMapMarkerType
+    val type: PhotoMapMarkerType,
+    val photos: List<DevicePhoto>,
+    val photoPositions: List<LatLng>
 )
 
 enum class PhotoMapMarkerType {
     Heat,
-    Thumbnail
+    Thumbnail,
+    SinglePhoto
 }

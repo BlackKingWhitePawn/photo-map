@@ -22,6 +22,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     val uiState: StateFlow<PhotoAccessUiState> = _uiState
 
     init {
+        refreshIndexStats()
         refreshPermissions(scanWhenAllowed = true)
     }
 
@@ -79,20 +80,25 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 )
             }
 
-            val photos = photoReader.readPhotos(readExifLocation = readExifLocation) { processed, total ->
+            val result = photoReader.readPhotos(readExifLocation = readExifLocation) { progress ->
                 _uiState.update { state ->
                     state.copy(
-                        scanProcessed = processed,
-                        scanTotal = total
+                        scanProcessed = progress.processed,
+                        scanTotal = progress.total,
+                        indexedLocationScannedCount = progress.indexedLocationScanned,
+                        indexedPhotoCount = progress.indexedTotal
                     )
                 }
             }
+            val resultStats = result.indexStats
 
             _uiState.update { state ->
                 state.copy(
                     permissionStatus = PhotoPermissionManager.checkStatus(getApplication()),
-                    photos = photos,
-                    photosWithLocationCount = photos.count { photo -> photo.hasLocation },
+                    photos = result.photos,
+                    photosWithLocationCount = result.photos.count { photo -> photo.hasLocation },
+                    indexedLocationScannedCount = resultStats.locationScannedCount,
+                    indexedPhotoCount = resultStats.totalCount,
                     isLoading = false,
                     loadingMessage = null
                 )
@@ -102,5 +108,18 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
 
     fun scanPhotosWithExif() {
         scanPhotos(readExifLocation = true)
+    }
+
+    private fun refreshIndexStats() {
+        viewModelScope.launch {
+            val stats = photoReader.getIndexStats()
+            _uiState.update { state ->
+                state.copy(
+                    photosWithLocationCount = stats.locationCount,
+                    indexedLocationScannedCount = stats.locationScannedCount,
+                    indexedPhotoCount = stats.totalCount
+                )
+            }
+        }
     }
 }

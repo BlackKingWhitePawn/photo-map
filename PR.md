@@ -1,27 +1,27 @@
-# PR: Large gallery performance
+# PR: Persistent photo index
 
 ## Summary
 
-* Optimized startup behavior for large local galleries, target size: 40k photos.
-* Stopped automatic startup scan from reading EXIF for every photo.
-* Added a separate manual EXIF GPS scan action.
-* Added scan progress updates every 500 photos.
-* Removed per-photo Logcat logging during MediaStore scans.
-* Stored GPS photo count in UI state instead of recalculating it in Compose.
-* Added grouped map marker icons that display the photo count.
-* Limited map marker rendering to the visible viewport after the initial fit-to-bounds.
+* Added a local SQLite index for processed photos.
+* Persisted EXIF scan progress across app restarts.
+* Reused cached coordinates for unchanged `MediaStore` items.
+* Invalidated cache entries when `dateModified` or `size` changes.
+* Updated indexed metadata when a photo is renamed.
+* Removed missing `MediaStore` items from the local index only.
+* Replaced fixed 500-step progress with time-based progress updates and percent display.
+* Added GPS index status to the photo access screen.
 
 ## Scope
 
-This PR covers performance and UX fixes for large local galleries after the first MapLibre map release.
+This PR covers a local persistent index for large galleries after the 40k performance branch.
 
 Not included:
 
-* Room index.
+* Full Room migration.
 * Gallery grid with Coil.
 * Fullscreen viewer.
 * WorkManager background scan.
-* Persistent incremental index for EXIF results.
+* User-facing index cleanup settings.
 
 ## Checks
 
@@ -44,10 +44,11 @@ On a device or emulator with photos:
 2. Tap `Предоставить доступ`.
 3. Grant full or selected photo access.
 4. Confirm the screen shows the number of found photos.
-5. Confirm startup scan finishes without reading EXIF for all photos.
-6. Tap `Искать GPS в EXIF` only when a deep GPS scan is needed.
-7. Confirm progress text shows `Обработано X из Y`.
-8. Tap `Открыть карту` and confirm grouped markers show photo counts.
+5. Tap `Искать GPS в EXIF`.
+6. Close/reopen the app during or after scanning.
+7. Confirm `GPS-индекс` keeps the saved processed count.
+8. Rename a photo and confirm it is still present with updated metadata.
+9. Delete a photo outside the app and confirm it disappears from the app after refresh.
 
 ## Safety
 
@@ -58,22 +59,22 @@ The app only requests read-oriented media permissions:
 * `READ_MEDIA_VISUAL_USER_SELECTED`;
 * `ACCESS_MEDIA_LOCATION`.
 
-No source code path deletes, trashes, writes, updates, moves, or overwrites user photos.
+No source code path deletes, trashes, writes, updates, moves, or overwrites user photos. The only delete operation in this branch removes rows from the app's private local SQLite index.
 
 ## Map
 
-The map keeps the existing MapLibre/OpenFreeMap setup. Marker rendering is now viewport-bound after the first camera fit, so zooming into a dense area does not render all mapped photos worldwide.
+The map keeps the existing MapLibre/OpenFreeMap setup and consumes the same `DevicePhoto` list. Cached coordinates from the local index are reused for map markers.
 
 ## Release
 
-Target release:
+No release APK is prepared in this branch. If this branch is released separately after merge, use:
 
 ```text
-v0.3.1
+v0.4.0
 ```
 
 Expected APK asset:
 
 ```text
-photomap-v0.3.1.apk
+photomap-v0.4.0.apk
 ```

@@ -12,6 +12,8 @@ data class PhotoAccessUiState(
     ),
     val photos: List<DevicePhoto> = emptyList(),
     val photosWithLocationCount: Int = 0,
+    val indexedLocationScannedCount: Int = 0,
+    val indexedPhotoCount: Int = 0,
     val isLoading: Boolean = false,
     val loadingMessage: String? = null,
     val scanProcessed: Int = 0,

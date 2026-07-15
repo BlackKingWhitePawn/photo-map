@@ -4,11 +4,16 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.database.Cursor
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import com.example.photomap.core.permissions.PhotoPermissionManager
 import com.example.photomap.core.util.GeoCoordinates
 import com.example.photomap.core.util.LocationValidator
+import com.example.photomap.data.local.IndexedPhoto
+import com.example.photomap.data.local.PhotoIndexDatabase
+import com.example.photomap.data.local.toDevicePhoto
+import com.example.photomap.data.local.toIndexedPhoto
 import com.example.photomap.domain.model.DevicePhoto
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -21,14 +26,36 @@ class AndroidMediaStorePhotoReader(
     private val appContext = context.applicationContext
     private val contentResolver: ContentResolver = context.applicationContext.contentResolver
     private val exifLocationReader = ExifLocationReader(contentResolver)
+    private val photoIndexDatabase = PhotoIndexDatabase(appContext)
 
     override suspend fun readPhotos(
         readExifLocation: Boolean,
-        onProgress: (processed: Int, total: Int) -> Unit
-    ): List<DevicePhoto> = withContext(ioDispatcher) {
+        onProgress: (PhotoReadProgress) -> Unit
+    ): PhotoReadResult = withContext(ioDispatcher) {
         val photos = mutableListOf<DevicePhoto>()
+        val photosToPersist = mutableListOf<IndexedPhoto>()
+        val currentMediaIds = mutableSetOf<Long>()
+        val cachedPhotos = photoIndexDatabase.getAllPhotosById()
+        val startIndexStats = photoIndexDatabase.getStats()
         val canReadOriginalLocation = readExifLocation &&
             PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
+        var currentLocationScannedCount = startIndexStats.locationScannedCount
+        var lastProgressReportAt = 0L
+
+        fun reportProgress(processed: Int, total: Int, force: Boolean = false) {
+            val now = SystemClock.elapsedRealtime()
+            if (force || now - lastProgressReportAt >= ProgressReportIntervalMs) {
+                onProgress(
+                    PhotoReadProgress(
+                        processed = processed,
+                        total = total,
+                        indexedLocationScanned = currentLocationScannedCount.coerceAtMost(total),
+                        indexedTotal = total
+                    )
+                )
+                lastProgressReportAt = now
+            }
+        }
 
         try {
             contentResolver.query(
@@ -40,19 +67,37 @@ class AndroidMediaStorePhotoReader(
             )?.use { cursor ->
                 val total = cursor.count
                 var processed = 0
-                onProgress(processed, total)
+                reportProgress(processed = processed, total = total, force = true)
 
                 while (cursor.moveToNext()) {
-                    val photo = cursor.toDevicePhoto(
+                    val currentPhoto = cursor.toDevicePhotoMetadata()
+                    currentMediaIds += currentPhoto.mediaId
+
+                    val cachedPhoto = cachedPhotos[currentPhoto.mediaId]
+                    val indexedPhoto = currentPhoto.resolveIndexedPhoto(
+                        cachedPhoto = cachedPhoto,
                         readExifLocation = readExifLocation,
                         canReadOriginalLocation = canReadOriginalLocation
                     )
-                    photos += photo
+                    photos += indexedPhoto.toDevicePhoto()
+                    photosToPersist += indexedPhoto
                     processed += 1
-                    if (processed % ProgressBatchSize == 0 || processed == total) {
-                        onProgress(processed, total)
+
+                    if (indexedPhoto.locationScanned && cachedPhoto?.locationScanned != true) {
+                        currentLocationScannedCount += 1
                     }
+
+                    if (photosToPersist.size >= PersistBatchSize) {
+                        photoIndexDatabase.upsertPhotos(photosToPersist)
+                        photosToPersist.clear()
+                    }
+
+                    reportProgress(processed = processed, total = total, force = processed == total)
                 }
+
+                photoIndexDatabase.upsertPhotos(photosToPersist)
+                photosToPersist.clear()
+                photoIndexDatabase.deleteMissingPhotos(currentMediaIds)
             }
         } catch (securityException: SecurityException) {
             Log.w(Tag, "No permission to read images from MediaStore", securityException)
@@ -64,24 +109,20 @@ class AndroidMediaStorePhotoReader(
             Tag,
             "MediaStore scan finished: ${photos.size} photos, withLocation=${photos.count { it.hasLocation }}, readExifLocation=$readExifLocation"
         )
-        photos
+        PhotoReadResult(
+            photos = photos,
+            indexStats = photoIndexDatabase.getStats()
+        )
     }
 
-    private fun Cursor.toDevicePhoto(
-        readExifLocation: Boolean,
-        canReadOriginalLocation: Boolean
-    ): DevicePhoto {
+    override suspend fun getIndexStats(): PhotoIndexStats = withContext(ioDispatcher) {
+        photoIndexDatabase.getStats()
+    }
+
+    private fun Cursor.toDevicePhotoMetadata(): DevicePhoto {
         val id = getLongValue(MediaStore.Images.Media._ID) ?: error("MediaStore image row without _ID")
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
         val mediaStoreLocation = readMediaStoreLocation()
-        val location = mediaStoreLocation ?: if (readExifLocation) {
-            exifLocationReader.readLocation(
-                uri = uri,
-                canReadOriginalLocation = canReadOriginalLocation
-            )
-        } else {
-            null
-        }
 
         return DevicePhoto(
             mediaId = id,
@@ -95,8 +136,40 @@ class AndroidMediaStorePhotoReader(
             height = getIntValue(MediaStore.Images.Media.HEIGHT),
             size = getLongValue(MediaStore.Images.Media.SIZE),
             orientation = getIntValue(MediaStore.Images.Media.ORIENTATION),
+            latitude = mediaStoreLocation?.latitude,
+            longitude = mediaStoreLocation?.longitude
+        )
+    }
+
+    private fun DevicePhoto.resolveIndexedPhoto(
+        cachedPhoto: IndexedPhoto?,
+        readExifLocation: Boolean,
+        canReadOriginalLocation: Boolean
+    ): IndexedPhoto {
+        val mediaStoreLocation = LocationValidator.normalize(latitude, longitude)
+        val cachedRevisionMatches = cachedPhoto?.hasSameMediaRevision(this) == true
+        val location = when {
+            mediaStoreLocation != null -> mediaStoreLocation
+            cachedRevisionMatches && cachedPhoto?.hasLocation == true -> GeoCoordinates(
+                latitude = requireNotNull(cachedPhoto.latitude),
+                longitude = requireNotNull(cachedPhoto.longitude)
+            )
+            readExifLocation -> exifLocationReader.readLocation(
+                uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId),
+                canReadOriginalLocation = canReadOriginalLocation
+            )
+            else -> null
+        }
+        val locationScanned = mediaStoreLocation != null ||
+            (cachedRevisionMatches && cachedPhoto?.locationScanned == true) ||
+            (readExifLocation && canReadOriginalLocation)
+
+        return copy(
             latitude = location?.latitude,
             longitude = location?.longitude
+        ).toIndexedPhoto(
+            locationScanned = locationScanned,
+            indexedAt = System.currentTimeMillis()
         )
     }
 
@@ -148,6 +221,7 @@ class AndroidMediaStorePhotoReader(
             MediaStore.Images.Media.LONGITUDE
         )
 
-        const val ProgressBatchSize = 500
+        const val PersistBatchSize = 50
+        const val ProgressReportIntervalMs = 100L
     }
 }

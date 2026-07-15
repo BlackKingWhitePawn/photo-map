@@ -17,7 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -116,10 +116,13 @@ fun PhotoAccessScreen(
             )
 
             if (state.isLoading) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    CircularProgressIndicator()
+                    LinearProgressIndicator(
+                        progress = { state.scanProgressFraction() },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Text(
                         text = state.loadingText(),
                         style = MaterialTheme.typography.bodyLarge
@@ -139,6 +142,13 @@ fun PhotoAccessScreen(
                 text = "Найдено фотографий: ${state.photos.size}, с координатами: ${state.photosWithLocationCount}",
                 style = MaterialTheme.typography.titleMedium
             )
+
+            if (state.indexedPhotoCount > 0) {
+                Text(
+                    text = "GPS-индекс: обработано ${state.indexedLocationScannedCount} из ${state.indexedPhotoCount}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
 
             if (state.photos.isEmpty() && state.permissionStatus.canReadImages && !state.isLoading) {
                 Text(
@@ -307,10 +317,22 @@ private fun accessDescription(accessLevel: PhotoAccessLevel): String {
 private fun PhotoAccessUiState.loadingText(): String {
     val message = loadingMessage ?: "Читаем фотографии из MediaStore"
     return if (scanTotal > 0) {
-        "$message\nОбработано $scanProcessed из $scanTotal"
+        "$message\nОбработано $scanProcessed из $scanTotal (${scanProgressPercent()}%)"
     } else {
         message
     }
+}
+
+private fun PhotoAccessUiState.scanProgressFraction(): Float {
+    return if (scanTotal > 0) {
+        (scanProcessed.toFloat() / scanTotal.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+}
+
+private fun PhotoAccessUiState.scanProgressPercent(): Int {
+    return (scanProgressFraction() * 100).toInt().coerceIn(0, 100)
 }
 
 private fun formatDate(context: Context, timeMillis: Long): String {

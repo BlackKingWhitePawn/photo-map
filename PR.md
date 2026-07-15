@@ -8,6 +8,7 @@
 * Added `DevicePhoto` domain model.
 * Added a Russian Compose screen for requesting access, showing permission state, scanning photos, and opening app settings.
 * Kept MediaStore access outside `MainActivity` and outside direct ViewModel calls to `ContentResolver`.
+* Prepared release version `0.2.0`.
 
 ## Scope
 
@@ -25,6 +26,7 @@ Not included:
 ## Checks
 
 * `.\gradlew.bat assembleDebug` - passed.
+* Debug APK metadata inspected: `versionCode=2`, `versionName=0.2.0`.
 * APK permissions inspected with `aapt2 dump permissions`.
 * Source checked for MediaStore delete/write operations.
 
@@ -54,3 +56,19 @@ The app only requests read-oriented media permissions:
 * `ACCESS_MEDIA_LOCATION`.
 
 No source code path deletes, trashes, writes, updates, moves, or overwrites user photos.
+
+## Release
+
+Target release:
+
+```text
+v0.2.0
+```
+
+Expected APK asset:
+
+```text
+photomap-v0.2.0.apk
+```
+
+The existing `app/release/app-release.apk` was generated before this release version bump and still reports `versionName=0.1.0`. Rebuild the signed release APK in Android Studio after merging these release prep changes.

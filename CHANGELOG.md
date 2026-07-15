@@ -8,6 +8,26 @@
 
 Изменений пока нет.
 
+## [0.3.0] - 2026-07-15
+
+### Добавлено
+
+* Добавлен первый экран карты на MapLibre без Google Maps API key.
+* Добавлено read-only чтение GPS-координат из MediaStore/EXIF.
+* Добавлено отображение фотографий с валидными координатами на карте.
+* Добавлена базовая группировка близких точек на карте.
+* Добавлена настройка `MAP_STYLE_URL` через `local.properties`.
+* По умолчанию подключён OpenFreeMap Liberty style без регистрации, API key и billing.
+
+### Изменено
+
+* Требование Google Maps заменено на MapLibre, чтобы убрать зависимость от Google Play Services и Google Maps billing.
+* Слои границ стран скрываются после загрузки стиля карты.
+
+### Безопасность
+
+* Удалены транзитивные runtime-разрешения `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION` и `ACCESS_WIFI_STATE`, подтянутые MapLibre SDK.
+
 ## [0.2.0] - 2026-07-15
 
 ### Добавлено

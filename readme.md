@@ -2,7 +2,7 @@
 
 Нативное Android-приложение для локальной галереи фотографий с будущим отображением снимков на карте.
 
-Проект разрабатывается по этапам. Текущая ветка `feature-02-permissions-mediastore` реализует запрос доступа к фотографиям и первичное чтение изображений через Android MediaStore.
+Проект разрабатывается по этапам. Текущая ветка `feature-03-map-screen` добавляет карту MapLibre и отображение фотографий с GPS-координатами.
 
 ## Текущее состояние
 
@@ -18,13 +18,15 @@
 * чтение изображений через `MediaStore.Images.Media`;
 * формирование URI через `ContentUris.withAppendedId`;
 * вывод найденных фотографий в Logcat с тегом `PhotoMapMediaStore`;
-* минимальный экран на русском с количеством найденных фотографий.
+* минимальный экран на русском с количеством найденных фотографий;
+* read-only чтение GPS-координат из MediaStore/EXIF;
+* первый экран карты на MapLibre без Google Maps API key;
+* отображение фотографий с координатами на карте;
+* базовая группировка близких точек.
 
 Пока не реализовано:
 
 * Room-индекс;
-* чтение EXIF;
-* карта и кластеризация;
 * галерея с миниатюрами;
 * полноэкранный просмотр;
 * WorkManager-фоновое сканирование.
@@ -35,11 +37,13 @@
 * Jetpack Compose;
 * Material 3;
 * Android MediaStore;
+* ExifInterface;
+* MapLibre Android SDK;
 * Kotlin Coroutines;
 * Flow и StateFlow;
 * ViewModel.
 
-Следующие этапы добавят Room, ExifInterface, Coil, Google Maps Compose, Maps Compose Utils, WorkManager и Hilt.
+Следующие этапы добавят Room, Coil, WorkManager и Hilt. MapLibre с OpenFreeMap не требует Google Maps API key, Google Play Services, регистрации или billing, но онлайн-карта требует интернет и доступный style/tile URL.
 
 ## Требования
 
@@ -91,6 +95,18 @@
 * ориентацию.
 
 Абсолютные пути файлов не используются как идентификаторы. Основной идентификатор - MediaStore ID.
+
+## Карта
+
+Карта работает через MapLibre Android SDK.
+
+По умолчанию используется OpenFreeMap Liberty style:
+
+```properties
+MAP_STYLE_URL=https://tiles.openfreemap.org/styles/liberty
+```
+
+При необходимости URL стиля можно переопределить в `local.properties`. Если позже используется платный tile provider с ключом, этот ключ нельзя добавлять в Git.
 
 ## Конфиденциальность
 

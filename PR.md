@@ -26,6 +26,8 @@ Not included:
 ## Checks
 
 * `.\gradlew.bat assembleDebug` - passed.
+* Debug APK metadata inspected: `versionCode=4`, `versionName=0.3.1`.
+* APK permissions inspected with `aapt2 dump permissions`.
 * Source checked for MediaStore delete/write operations.
 
 The command was run with `JAVA_HOME` set to Android Studio JBR for the current process:
@@ -64,7 +66,7 @@ The map keeps the existing MapLibre/OpenFreeMap setup. Marker rendering is now v
 
 ## Release
 
-No release APK is prepared in this branch. If this branch is released separately after merge, use:
+Target release:
 
 ```text
 v0.3.1

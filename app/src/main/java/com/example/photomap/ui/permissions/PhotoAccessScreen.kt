@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -29,10 +30,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.example.photomap.R
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.photomap.core.permissions.PhotoAccessLevel
 import com.example.photomap.core.permissions.PhotoPermissionManager
@@ -42,7 +45,8 @@ import java.util.Date
 @Composable
 fun PhotoAccessRoute(
     viewModel: PhotoAccessViewModel = viewModel(),
-    onOpenMap: () -> Unit = {}
+    onOpenMap: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -73,7 +77,11 @@ fun PhotoAccessRoute(
         },
         onScan = { viewModel.scanPhotos() },
         onScanWithExif = viewModel::scanPhotosWithExif,
+        onPause = viewModel::pauseCurrentAction,
+        onResume = viewModel::resumeCurrentAction,
+        onCancel = viewModel::cancelCurrentAction,
         onOpenMap = onOpenMap,
+        onOpenAppSettings = onOpenAppSettings,
         onOpenSettings = {
             val intent = Intent(
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -90,7 +98,11 @@ fun PhotoAccessScreen(
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
     onScanWithExif: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
     onOpenMap: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -111,7 +123,11 @@ fun PhotoAccessScreen(
                 onRequestPermissions = onRequestPermissions,
                 onScan = onScan,
                 onScanWithExif = onScanWithExif,
+                onPause = onPause,
+                onResume = onResume,
+                onCancel = onCancel,
                 onOpenMap = onOpenMap,
+                onOpenAppSettings = onOpenAppSettings,
                 onOpenSettings = onOpenSettings
             )
 
@@ -177,7 +193,11 @@ private fun PermissionSummaryCard(
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
     onScanWithExif: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
     onOpenMap: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Card(
@@ -227,9 +247,19 @@ private fun PermissionSummaryCard(
             ) {
                 Button(
                     modifier = Modifier.fillMaxWidth(),
-                    onClick = onRequestPermissions
+                    onClick = if (state.permissionStatus.canReadImages) {
+                        onOpenSettings
+                    } else {
+                        onRequestPermissions
+                    }
                 ) {
-                    Text(text = "Предоставить доступ")
+                    Text(
+                        text = if (state.permissionStatus.canReadImages) {
+                            "Отозвать доступ"
+                        } else {
+                            "Предоставить доступ"
+                        }
+                    )
                 }
 
                 OutlinedButton(
@@ -254,6 +284,29 @@ private fun PermissionSummaryCard(
                     enabled = state.permissionStatus.canReadImages
                 ) {
                     Text(text = "Открыть карту")
+                }
+
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onOpenAppSettings
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_settings_24),
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(text = "Настройки")
+                }
+
+                if (state.isLoading) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = if (state.isScanPaused) onResume else onPause) {
+                            Text(text = if (state.isScanPaused) "Продолжить" else "Пауза")
+                        }
+                        OutlinedButton(onClick = onCancel) {
+                            Text(text = "Отмена")
+                        }
+                    }
                 }
 
                 if (state.hasRequestedPermissions && !state.permissionStatus.canReadImages) {
@@ -315,6 +368,14 @@ private fun accessDescription(accessLevel: PhotoAccessLevel): String {
 }
 
 private fun PhotoAccessUiState.loadingText(): String {
+    if (isScanPaused) {
+        return if (scanTotal > 0) {
+            "Пауза\nОбработано $scanProcessed из $scanTotal (${scanProgressPercent()}%)"
+        } else {
+            "Пауза"
+        }
+    }
+
     val message = loadingMessage ?: "Читаем фотографии из MediaStore"
     return if (scanTotal > 0) {
         "$message\nОбработано $scanProcessed из $scanTotal (${scanProgressPercent()}%)"

@@ -5,8 +5,12 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
+import android.net.Uri
 import android.os.Bundle
+import android.util.Size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -31,21 +36,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.example.photomap.R
 import com.example.photomap.domain.model.DevicePhoto
+import kotlin.math.floor
+import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.Icon
 import org.maplibre.android.annotations.IconFactory
-import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
-import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory.fillColor
@@ -54,8 +62,17 @@ import org.maplibre.android.style.layers.PropertyFactory.fillColor
 fun PhotoMapScreen(
     photos: List<DevicePhoto>,
     mapStyleUrl: String,
+    thumbnailThreshold: Int,
+    isScanning: Boolean,
+    isScanPaused: Boolean,
+    scanProcessed: Int,
+    scanTotal: Int,
     onBack: () -> Unit,
-    onScan: () -> Unit
+    onScan: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val photosWithLocation = remember(photos) {
         photos.filter { photo -> photo.latitude != null && photo.longitude != null }
@@ -66,21 +83,47 @@ fun PhotoMapScreen(
             MapTopBar(
                 totalPhotos = photos.size,
                 photosWithLocation = photosWithLocation.size,
+                thumbnailThreshold = thumbnailThreshold,
+                isScanning = isScanning,
+                isScanPaused = isScanPaused,
+                scanProcessed = scanProcessed,
+                scanTotal = scanTotal,
                 onBack = onBack,
-                onScan = onScan
+                onScan = onScan,
+                onPause = onPause,
+                onResume = onResume,
+                onCancel = onCancel,
+                onOpenSettings = onOpenSettings
             )
 
-            if (photosWithLocation.isEmpty()) {
+            if (photosWithLocation.isEmpty() && !isScanning) {
                 MapMessage(
                     title = "Нет фотографий с геопозицией",
-                    text = "На карте появятся фотографии, в которых сохранены GPS-координаты. Сейчас можно повторить сканирование или вернуться к списку фотографий.",
+                    text = "На карте появятся фотографии, в которых сохранены GPS-координаты. Можно повторить сканирование или открыть настройки доступа.",
                     onBack = onBack
                 )
             } else {
-                PhotoMapLibreMap(
-                    photos = photosWithLocation,
-                    mapStyleUrl = mapStyleUrl
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    PhotoMapLibreMap(
+                        photos = photosWithLocation,
+                        mapStyleUrl = mapStyleUrl,
+                        thumbnailThreshold = thumbnailThreshold
+                    )
+
+                    if (photosWithLocation.isEmpty() && isScanning) {
+                        Card(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(20.dp)
+                        ) {
+                            Text(
+                                modifier = Modifier.padding(16.dp),
+                                text = "Индексирование уже идёт. Карта доступна, найденные фото появятся здесь по мере обработки.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -90,8 +133,17 @@ fun PhotoMapScreen(
 private fun MapTopBar(
     totalPhotos: Int,
     photosWithLocation: Int,
+    thumbnailThreshold: Int,
+    isScanning: Boolean,
+    isScanPaused: Boolean,
+    scanProcessed: Int,
+    scanTotal: Int,
     onBack: () -> Unit,
-    onScan: () -> Unit
+    onScan: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -108,15 +160,43 @@ private fun MapTopBar(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "Всего фотографий: $totalPhotos, с координатами: $photosWithLocation",
+                text = "Всего: $totalPhotos, с координатами: $photosWithLocation, порог миниатюр: $thumbnailThreshold",
                 style = MaterialTheme.typography.bodyMedium
             )
+            if (isScanning) {
+                Text(
+                    text = scanStatusText(isScanPaused, scanProcessed, scanTotal),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onBack) {
                     Text(text = "Назад")
                 }
-                Button(onClick = onScan) {
+                OutlinedButton(onClick = onOpenSettings) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_settings_24),
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(text = "Настройки")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onScan,
+                    enabled = !isScanning
+                ) {
                     Text(text = "Сканировать")
+                }
+                if (isScanning) {
+                    OutlinedButton(onClick = if (isScanPaused) onResume else onPause) {
+                        Text(text = if (isScanPaused) "Продолжить" else "Пауза")
+                    }
+                    OutlinedButton(onClick = onCancel) {
+                        Text(text = "Отмена")
+                    }
                 }
             }
         }
@@ -160,7 +240,8 @@ private fun MapMessage(
 @Composable
 private fun PhotoMapLibreMap(
     photos: List<DevicePhoto>,
-    mapStyleUrl: String
+    mapStyleUrl: String,
+    thumbnailThreshold: Int
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -169,8 +250,11 @@ private fun PhotoMapLibreMap(
     var zoomBucket by remember { mutableStateOf(DefaultZoomBucket) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
-    val clusterIconFactory = remember(context) {
-        ClusterIconFactory(context.applicationContext)
+    val heatIconFactory = remember(context) {
+        HeatIconFactory(context.applicationContext)
+    }
+    val thumbnailIconFactory = remember(context) {
+        ThumbnailIconFactory(context.applicationContext)
     }
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
@@ -190,10 +274,13 @@ private fun PhotoMapLibreMap(
             }
         }
     }
-    val markers = remember(photos, zoomBucket, visibleBounds) {
+    val markers = remember(photos, zoomBucket, visibleBounds, thumbnailThreshold) {
         photos
             .filterByBounds(visibleBounds)
-            .toMapMarkers(zoomBucket)
+            .toMapMarkers(
+                zoomBucket = zoomBucket,
+                thumbnailThreshold = thumbnailThreshold
+            )
     }
     val cameraPositions = remember(photos) {
         photos.mapNotNull { photo ->
@@ -224,7 +311,7 @@ private fun PhotoMapLibreMap(
         }
     }
 
-    LaunchedEffect(map, isStyleReady, markers, cameraPositions) {
+    LaunchedEffect(map, isStyleReady, markers, cameraPositions, thumbnailThreshold) {
         val mapLibreMap = map ?: return@LaunchedEffect
         if (!isStyleReady) {
             return@LaunchedEffect
@@ -235,11 +322,13 @@ private fun PhotoMapLibreMap(
                 markers = markers,
                 cameraPositions = cameraPositions,
                 fitCamera = !hasFitCamera,
-                clusterIconFactory = clusterIconFactory
+                heatIconFactory = heatIconFactory,
+                thumbnailIconFactory = thumbnailIconFactory,
+                thumbnailThreshold = thumbnailThreshold
             )
         }
 
-        if (markers.isNotEmpty()) {
+        if (cameraPositions.isNotEmpty()) {
             hasFitCamera = true
         }
     }
@@ -254,19 +343,25 @@ private fun MapLibreMap.renderMarkers(
     markers: List<PhotoMapMarker>,
     cameraPositions: List<LatLng>,
     fitCamera: Boolean,
-    clusterIconFactory: ClusterIconFactory
+    heatIconFactory: HeatIconFactory,
+    thumbnailIconFactory: ThumbnailIconFactory,
+    thumbnailThreshold: Int
 ) {
     clear()
 
     markers.forEach { marker ->
+        val icon = when (marker.type) {
+            PhotoMapMarkerType.Heat -> heatIconFactory.iconFor(
+                count = marker.count,
+                threshold = thumbnailThreshold
+            )
+            PhotoMapMarkerType.Thumbnail -> thumbnailIconFactory.iconFor(marker)
+        }
         val options = MarkerOptions()
             .position(marker.position)
             .title(marker.title)
             .snippet(marker.snippet)
-
-        if (marker.count > 1) {
-            options.icon(clusterIconFactory.iconFor(marker.count))
-        }
+            .icon(icon)
 
         addMarker(options)
     }
@@ -323,81 +418,201 @@ private fun List<DevicePhoto>.filterByBounds(bounds: LatLngBounds?): List<Device
     }
 }
 
-private fun List<DevicePhoto>.toMapMarkers(zoomBucket: Int): List<PhotoMapMarker> {
+private fun List<DevicePhoto>.toMapMarkers(
+    zoomBucket: Int,
+    thumbnailThreshold: Int
+): List<PhotoMapMarker> {
     return groupBy { photo ->
         val latitude = requireNotNull(photo.latitude)
         val longitude = requireNotNull(photo.longitude)
         val cellSize = zoomBucket.cellSize()
-        "${(latitude / cellSize).toInt()}:${(longitude / cellSize).toInt()}"
-    }.map { (cellId, photos) ->
-        if (photos.size == 1) {
-            val photo = photos.first()
-            PhotoMapMarker(
-                id = photo.mediaId.toString(),
-                title = photo.displayName ?: "Фото ${photo.mediaId}",
-                snippet = photo.uri,
-                position = LatLng(requireNotNull(photo.latitude), requireNotNull(photo.longitude)),
-                count = 1
-            )
+        "${floor(latitude / cellSize).toInt()}:${floor(longitude / cellSize).toInt()}"
+    }.map { (cellId, groupedPhotos) ->
+        val count = groupedPhotos.size
+        val newestPhoto = groupedPhotos.maxByOrNull { photo ->
+            photo.dateTaken ?: photo.dateModified ?: photo.dateAdded ?: 0L
+        } ?: groupedPhotos.first()
+        val latitude = groupedPhotos.map { photo -> requireNotNull(photo.latitude) }.average()
+        val longitude = groupedPhotos.map { photo -> requireNotNull(photo.longitude) }.average()
+        val type = if (count >= thumbnailThreshold) {
+            PhotoMapMarkerType.Thumbnail
         } else {
-            val latitude = photos.map { requireNotNull(it.latitude) }.average()
-            val longitude = photos.map { requireNotNull(it.longitude) }.average()
-            PhotoMapMarker(
-                id = cellId,
-                title = "Фотографий: ${photos.size}",
-                snippet = photos.joinToString(limit = 3) { it.displayName ?: "Фото ${it.mediaId}" },
-                position = LatLng(latitude, longitude),
-                count = photos.size
-            )
+            PhotoMapMarkerType.Heat
         }
+
+        PhotoMapMarker(
+            id = if (count == 1) newestPhoto.mediaId.toString() else cellId,
+            title = if (count == 1) {
+                newestPhoto.displayName ?: "Фото ${newestPhoto.mediaId}"
+            } else {
+                "Фотографий: $count"
+            },
+            snippet = if (count == 1) {
+                newestPhoto.uri
+            } else {
+                groupedPhotos.joinToString(limit = 3) { photo ->
+                    photo.displayName ?: "Фото ${photo.mediaId}"
+                }
+            },
+            position = LatLng(latitude, longitude),
+            count = count,
+            thumbnailUri = newestPhoto.uri,
+            type = type
+        )
     }
 }
 
-private class ClusterIconFactory(context: Context) {
+private class HeatIconFactory(context: Context) {
     private val iconFactory = IconFactory.getInstance(context)
     private val cache = mutableMapOf<String, Icon>()
 
-    fun iconFor(count: Int): Icon {
-        val label = count.toClusterLabel()
-        return cache.getOrPut(label) {
-            iconFactory.fromBitmap(createClusterBitmap(label))
+    fun iconFor(count: Int, threshold: Int): Icon {
+        val bucket = when {
+            count <= 1 -> 1
+            count < threshold / 2 -> 2
+            else -> 3
+        }
+        val key = "$bucket:$threshold"
+        return cache.getOrPut(key) {
+            iconFactory.fromBitmap(createHeatBitmap(bucket))
         }
     }
 
-    private fun createClusterBitmap(label: String): Bitmap {
-        val bitmap = Bitmap.createBitmap(ClusterIconSizePx, ClusterIconSizePx, Bitmap.Config.ARGB_8888)
+    private fun createHeatBitmap(bucket: Int): Bitmap {
+        val size = HeatIconSizePx + bucket * 12
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(32, 104, 94)
+        val center = size / 2f
+        val maxRadius = center - 2f
+        val rings = listOf(
+            Ring(maxRadius, Color.argb(52 + bucket * 16, 255, 193, 7)),
+            Ring(maxRadius * 0.66f, Color.argb(72 + bucket * 18, 255, 112, 67)),
+            Ring(maxRadius * 0.34f, Color.argb(108 + bucket * 22, 198, 40, 40))
+        )
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
-        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            strokeWidth = 5f
-            style = Paint.Style.STROKE
-        }
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textAlign = Paint.Align.CENTER
-            textSize = if (label.length <= 3) 28f else 23f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        val center = ClusterIconSizePx / 2f
-        canvas.drawCircle(center, center, center - 5f, circlePaint)
-        canvas.drawCircle(center, center, center - 7f, strokePaint)
 
-        val textBounds = Rect()
-        textPaint.getTextBounds(label, 0, label.length, textBounds)
-        canvas.drawText(label, center, center - textBounds.exactCenterY(), textPaint)
+        rings.forEach { ring ->
+            paint.color = ring.color
+            canvas.drawCircle(center, center, ring.radius, paint)
+        }
+
         return bitmap
     }
 }
 
-private fun Int.toClusterLabel(): String {
-    return when {
-        this > 9999 -> "9999+"
-        this > 999 -> "${this / 1000}k"
-        else -> toString()
+private class ThumbnailIconFactory(context: Context) {
+    private val appContext = context.applicationContext
+    private val iconFactory = IconFactory.getInstance(appContext)
+    private val cache = mutableMapOf<String, Icon>()
+
+    fun iconFor(marker: PhotoMapMarker): Icon {
+        val key = "${marker.thumbnailUri}:${marker.count}"
+        return cache.getOrPut(key) {
+            iconFactory.fromBitmap(createThumbnailBitmap(marker.thumbnailUri, marker.count))
+        }
+    }
+
+    private fun createThumbnailBitmap(uriString: String?, count: Int): Bitmap {
+        val bitmap = Bitmap.createBitmap(ThumbnailIconWidthPx, ThumbnailIconHeightPx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(32, 104, 94)
+            strokeWidth = 4f
+            style = Paint.Style.STROKE
+        }
+        val thumbnailRect = RectF(4f, 4f, ThumbnailIconWidthPx - 4f, ThumbnailIconHeightPx - 24f)
+
+        canvas.drawRoundRect(
+            RectF(0f, 0f, ThumbnailIconWidthPx.toFloat(), ThumbnailIconHeightPx.toFloat()),
+            16f,
+            16f,
+            backgroundPaint
+        )
+        drawThumbnail(canvas, thumbnailRect, uriString)
+        canvas.drawRoundRect(
+            RectF(2f, 2f, ThumbnailIconWidthPx - 2f, ThumbnailIconHeightPx - 2f),
+            16f,
+            16f,
+            borderPaint
+        )
+        drawBadge(canvas, count)
+
+        return bitmap
+    }
+
+    private fun drawThumbnail(canvas: Canvas, rect: RectF, uriString: String?) {
+        val thumbnail = uriString?.let { uri ->
+            runCatching {
+                appContext.contentResolver.loadThumbnail(
+                    Uri.parse(uri),
+                    Size(ThumbnailLoadSizePx, ThumbnailLoadSizePx),
+                    null
+                )
+            }.getOrNull()
+        }
+
+        if (thumbnail == null) {
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(225, 235, 232)
+                style = Paint.Style.FILL
+            }
+            canvas.drawRoundRect(rect, 12f, 12f, paint)
+            return
+        }
+
+        val path = Path().apply {
+            addRoundRect(rect, 12f, 12f, Path.Direction.CW)
+        }
+        val saveCount = canvas.save()
+        canvas.clipPath(path)
+        canvas.drawBitmap(
+            thumbnail,
+            null,
+            Rect(
+                rect.left.toInt(),
+                rect.top.toInt(),
+                rect.right.toInt(),
+                rect.bottom.toInt()
+            ),
+            Paint(Paint.ANTI_ALIAS_FLAG)
+        )
+        canvas.restoreToCount(saveCount)
+    }
+
+    private fun drawBadge(canvas: Canvas, count: Int) {
+        val label = "+${(count - 1).coerceAtLeast(0)} фото"
+        val badgeRect = RectF(10f, ThumbnailIconHeightPx - 36f, ThumbnailIconWidthPx - 10f, ThumbnailIconHeightPx - 8f)
+        val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(32, 104, 94)
+            style = Paint.Style.FILL
+        }
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            textSize = 18f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+
+        canvas.drawRoundRect(badgeRect, 14f, 14f, badgePaint)
+
+        val textBounds = Rect()
+        textPaint.getTextBounds(label, 0, label.length, textBounds)
+        canvas.drawText(label, badgeRect.centerX(), badgeRect.centerY() - textBounds.exactCenterY(), textPaint)
+    }
+}
+
+private fun scanStatusText(isPaused: Boolean, processed: Int, total: Int): String {
+    val prefix = if (isPaused) "Пауза" else "Сканирование"
+    return if (total > 0) {
+        "$prefix: $processed из $total"
+    } else {
+        prefix
     }
 }
 
@@ -419,9 +634,17 @@ private fun Int.cellSize(): Double {
     }
 }
 
+private data class Ring(
+    val radius: Float,
+    val color: Int
+)
+
 private const val DefaultZoomBucket = 1
 private const val MapBoundsPaddingPx = 120
-private const val ClusterIconSizePx = 88
+private const val HeatIconSizePx = 76
+private const val ThumbnailIconWidthPx = 116
+private const val ThumbnailIconHeightPx = 104
+private const val ThumbnailLoadSizePx = 96
 
 private const val LandFillColor = "#E7ECE6"
 

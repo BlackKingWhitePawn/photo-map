@@ -1022,3 +1022,19 @@ MVP считается готовым, если:
 * секреты и ключи tile-провайдеров не хранятся в Git;
 * основные функции покрыты тестами;
 * README содержит инструкцию по запуску.
+
+## 33. Codex local workflow notes
+
+1. After code patches, always run a compile check and fix compilation errors before finishing.
+2. Do not run tests, npx, tsc, or eslint unless the user explicitly changes this rule.
+
+## 34. Codex release workflow notes
+
+1. Prepare releases only from a named branch that matches the current work scope.
+2. For every release, bump `versionName` and `versionCode` in `app/build.gradle.kts`.
+3. Update `CHANGELOG.md` and add `release-notes/v<version>.md`.
+4. Verify the APK with `aapt2 dump badging` and `aapt2 dump permissions`.
+5. Record APK metadata in release notes: package name, `versionCode`, `versionName`, min SDK, target SDK, and permission list.
+6. Never add APK, AAB, keystore, signing files, `.gradle-home/`, or build outputs to Git.
+7. Do not create a release tag until source changes are committed, the working tree is clean, and the APK metadata matches the release version.
+8. If compile or APK verification is blocked by environment limits, write the blocker explicitly in release notes and final status.

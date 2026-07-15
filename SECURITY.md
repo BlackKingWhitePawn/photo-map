@@ -20,7 +20,7 @@ Allowed for current and planned MVP work:
 
 * reading image rows from MediaStore;
 * reading EXIF metadata when required and permitted;
-* storing local index metadata in Room;
+* storing local index metadata in the app's private SQLite/Room database;
 * loading thumbnails through Android/Coil read APIs;
 * deleting only the app's own local index records, never original media files.
 

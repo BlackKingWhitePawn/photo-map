@@ -4,7 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.example.photomap.ui.permissions.PhotoAccessRoute
+import com.example.photomap.ui.PhotoMapApp
 import com.example.photomap.ui.theme.PhotoMapTheme
 
 class MainActivity : ComponentActivity() {
@@ -13,7 +13,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             PhotoMapTheme {
-                PhotoAccessRoute()
+                PhotoMapApp()
             }
         }
     }

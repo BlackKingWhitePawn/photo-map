@@ -6,6 +6,9 @@ import android.content.Context
 import android.database.Cursor
 import android.provider.MediaStore
 import android.util.Log
+import com.example.photomap.core.permissions.PhotoPermissionManager
+import com.example.photomap.core.util.GeoCoordinates
+import com.example.photomap.core.util.LocationValidator
 import com.example.photomap.domain.model.DevicePhoto
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -15,10 +18,13 @@ class AndroidMediaStorePhotoReader(
     context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : DevicePhotoReader {
+    private val appContext = context.applicationContext
     private val contentResolver: ContentResolver = context.applicationContext.contentResolver
+    private val exifLocationReader = ExifLocationReader(contentResolver)
 
     override suspend fun readPhotos(): List<DevicePhoto> = withContext(ioDispatcher) {
         val photos = mutableListOf<DevicePhoto>()
+        val canReadOriginalLocation = PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
 
         try {
             contentResolver.query(
@@ -29,9 +35,14 @@ class AndroidMediaStorePhotoReader(
                 "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
             )?.use { cursor ->
                 while (cursor.moveToNext()) {
-                    val photo = cursor.toDevicePhoto()
+                    val photo = cursor.toDevicePhoto(
+                        canReadOriginalLocation = canReadOriginalLocation
+                    )
                     photos += photo
-                    Log.d(Tag, "MediaStore photo: id=${photo.mediaId}, name=${photo.displayName}, uri=${photo.uri}")
+                    Log.d(
+                        Tag,
+                        "MediaStore photo: id=${photo.mediaId}, name=${photo.displayName}, uri=${photo.uri}, hasLocation=${photo.hasLocation}"
+                    )
                 }
             }
         } catch (securityException: SecurityException) {
@@ -44,9 +55,14 @@ class AndroidMediaStorePhotoReader(
         photos
     }
 
-    private fun Cursor.toDevicePhoto(): DevicePhoto {
+    private fun Cursor.toDevicePhoto(canReadOriginalLocation: Boolean): DevicePhoto {
         val id = getLongValue(MediaStore.Images.Media._ID) ?: error("MediaStore image row without _ID")
         val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+        val mediaStoreLocation = readMediaStoreLocation()
+        val location = mediaStoreLocation ?: exifLocationReader.readLocation(
+            uri = uri,
+            canReadOriginalLocation = canReadOriginalLocation
+        )
 
         return DevicePhoto(
             mediaId = id,
@@ -59,7 +75,17 @@ class AndroidMediaStorePhotoReader(
             width = getIntValue(MediaStore.Images.Media.WIDTH),
             height = getIntValue(MediaStore.Images.Media.HEIGHT),
             size = getLongValue(MediaStore.Images.Media.SIZE),
-            orientation = getIntValue(MediaStore.Images.Media.ORIENTATION)
+            orientation = getIntValue(MediaStore.Images.Media.ORIENTATION),
+            latitude = location?.latitude,
+            longitude = location?.longitude
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Cursor.readMediaStoreLocation(): GeoCoordinates? {
+        return LocationValidator.normalize(
+            latitude = getDoubleValue(MediaStore.Images.Media.LATITUDE),
+            longitude = getDoubleValue(MediaStore.Images.Media.LONGITUDE)
         )
     }
 
@@ -78,6 +104,11 @@ class AndroidMediaStorePhotoReader(
         return if (index >= 0 && !isNull(index)) getInt(index) else null
     }
 
+    private fun Cursor.getDoubleValue(columnName: String): Double? {
+        val index = getColumnIndex(columnName)
+        return if (index >= 0 && !isNull(index)) getDouble(index) else null
+    }
+
     private companion object {
         const val Tag = "PhotoMapMediaStore"
 
@@ -91,7 +122,11 @@ class AndroidMediaStorePhotoReader(
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.ORIENTATION
+            MediaStore.Images.Media.ORIENTATION,
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.LATITUDE,
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.LONGITUDE
         )
     }
 }

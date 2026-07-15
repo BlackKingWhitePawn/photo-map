@@ -41,7 +41,8 @@ import java.util.Date
 
 @Composable
 fun PhotoAccessRoute(
-    viewModel: PhotoAccessViewModel = viewModel()
+    viewModel: PhotoAccessViewModel = viewModel(),
+    onOpenMap: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -71,6 +72,7 @@ fun PhotoAccessRoute(
             permissionLauncher.launch(PhotoPermissionManager.permissionsToRequest())
         },
         onScan = viewModel::scanPhotos,
+        onOpenMap = onOpenMap,
         onOpenSettings = {
             val intent = Intent(
                 Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -86,6 +88,7 @@ fun PhotoAccessScreen(
     state: PhotoAccessUiState,
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
+    onOpenMap: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -105,6 +108,7 @@ fun PhotoAccessScreen(
                 state = state,
                 onRequestPermissions = onRequestPermissions,
                 onScan = onScan,
+                onOpenMap = onOpenMap,
                 onOpenSettings = onOpenSettings
             )
 
@@ -129,7 +133,7 @@ fun PhotoAccessScreen(
             }
 
             Text(
-                text = "Найдено фотографий: ${state.photos.size}",
+                text = "Найдено фотографий: ${state.photos.size}, с координатами: ${state.photos.count { it.hasLocation }}",
                 style = MaterialTheme.typography.titleMedium
             )
 
@@ -159,6 +163,7 @@ private fun PermissionSummaryCard(
     state: PhotoAccessUiState,
     onRequestPermissions: () -> Unit,
     onScan: () -> Unit,
+    onOpenMap: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Card(
@@ -221,6 +226,14 @@ private fun PermissionSummaryCard(
                     Text(text = "Сканировать")
                 }
 
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onOpenMap,
+                    enabled = state.permissionStatus.canReadImages
+                ) {
+                    Text(text = "Открыть карту")
+                }
+
                 if (state.hasRequestedPermissions && !state.permissionStatus.canReadImages) {
                     OutlinedButton(
                         modifier = Modifier.fillMaxWidth(),
@@ -257,6 +270,7 @@ private fun PhotoRow(photo: DevicePhoto) {
             Text(
                 text = listOfNotNull(
                     photo.mimeType,
+                    if (photo.hasLocation) "GPS" else null,
                     photo.dateTaken?.let { millis -> formatDate(context, millis) },
                     photo.size?.let { bytes -> "${bytes / 1024} КБ" }
                 ).joinToString(separator = " · "),

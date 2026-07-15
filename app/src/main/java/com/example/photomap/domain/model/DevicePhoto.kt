@@ -11,5 +11,10 @@ data class DevicePhoto(
     val width: Int?,
     val height: Int?,
     val size: Long?,
-    val orientation: Int?
-)
+    val orientation: Int?,
+    val latitude: Double?,
+    val longitude: Double?
+) {
+    val hasLocation: Boolean
+        get() = latitude != null && longitude != null
+}

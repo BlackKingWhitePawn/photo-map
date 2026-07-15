@@ -60,12 +60,12 @@
 
 ## Проверки
 
-Обязательная проверка после патчей:
+Сборку и compile checks выполняет пользователь вручную. Codex не запускает build/compile после патчей и в итоговом отчёте явно указывает, что сборка оставлена пользователю.
+
+Ручная команда для проверки пользователем:
 
 ```bash
-.\gradlew.bat :app:compileDebugKotlin
+.\gradlew.bat assembleDebug
 ```
 
 Тесты, `npx`, `tsc` и `eslint` не запускать без отдельного запроса пользователя.
-
-Текущее ограничение проверки: в sandbox-компиляции Gradle останавливается до Kotlin-компиляции, потому что workspace cache не содержит `org.gradle.toolchains.foojay-resolver-convention:1.0.0`, а сетевой запуск wrapper был отклонен.

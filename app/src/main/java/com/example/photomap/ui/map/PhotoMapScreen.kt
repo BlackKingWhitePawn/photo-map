@@ -3,14 +3,15 @@ package com.example.photomap.ui.map
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.ImageDecoder
 import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.util.Log
 import android.util.Size
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -35,10 +38,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -49,13 +54,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.photomap.R
+import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.domain.model.DevicePhoto
 import java.util.Date
-import kotlin.math.floor
+import kotlin.math.max
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import org.maplibre.android.MapLibre
-import org.maplibre.android.annotations.Icon as MapIcon
-import org.maplibre.android.annotations.IconFactory
-import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
@@ -64,12 +70,16 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory.fillColor
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.Point
 
 @Composable
 fun PhotoMapScreen(
     photos: List<DevicePhoto>,
     mapStyleUrl: String,
-    thumbnailThreshold: Int,
+    clusterSettings: PhotoClusterSettings,
     isScanning: Boolean,
     isScanPaused: Boolean,
     scanProcessed: Int,
@@ -81,8 +91,9 @@ fun PhotoMapScreen(
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
+    val normalizedClusterSettings = clusterSettings.normalized()
     val photosWithLocation = remember(photos) {
-        photos.filter { photo -> photo.latitude != null && photo.longitude != null }
+        photos.filter { photo -> photo.toMapPoint() != null }
     }
     var centerRequestKey by remember { mutableStateOf(0) }
 
@@ -91,7 +102,7 @@ fun PhotoMapScreen(
             MapTopBar(
                 totalPhotos = photos.size,
                 photosWithLocation = photosWithLocation.size,
-                thumbnailThreshold = thumbnailThreshold,
+                clusterSettings = normalizedClusterSettings,
                 isScanning = isScanning,
                 isScanPaused = isScanPaused,
                 scanProcessed = scanProcessed,
@@ -116,7 +127,7 @@ fun PhotoMapScreen(
                     PhotoMapLibreMap(
                         photos = photosWithLocation,
                         mapStyleUrl = mapStyleUrl,
-                        thumbnailThreshold = thumbnailThreshold,
+                        clusterSettings = normalizedClusterSettings,
                         centerRequestKey = centerRequestKey
                     )
 
@@ -143,7 +154,7 @@ fun PhotoMapScreen(
 private fun MapTopBar(
     totalPhotos: Int,
     photosWithLocation: Int,
-    thumbnailThreshold: Int,
+    clusterSettings: PhotoClusterSettings,
     isScanning: Boolean,
     isScanPaused: Boolean,
     scanProcessed: Int,
@@ -171,8 +182,12 @@ private fun MapTopBar(
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                text = "Всего: $totalPhotos, с координатами: $photosWithLocation, порог миниатюр: $thumbnailThreshold",
+                text = "Всего: $totalPhotos, с координатами: $photosWithLocation",
                 style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "Кластеры: ${clusterSettings.radiusPx}px, минимум ${clusterSettings.minPoints}",
+                style = MaterialTheme.typography.bodySmall
             )
             if (isScanning) {
                 Text(
@@ -186,7 +201,7 @@ private fun MapTopBar(
                     Text(text = "Назад")
                 }
                 OutlinedButton(onClick = onCenterMap) {
-                    Text(text = "\u0426\u0435\u043d\u0442\u0440")
+                    Text(text = "Центр")
                 }
                 OutlinedButton(onClick = onOpenSettings) {
                     Icon(
@@ -255,57 +270,86 @@ private fun MapMessage(
 private fun PhotoMapLibreMap(
     photos: List<DevicePhoto>,
     mapStyleUrl: String,
-    thumbnailThreshold: Int,
+    clusterSettings: PhotoClusterSettings,
     centerRequestKey: Int
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val colorScheme = MaterialTheme.colorScheme
+    val layerColors = PhotoMapLayerColors(
+        clusterSmall = colorScheme.primary.toArgb(),
+        clusterMedium = colorScheme.tertiary.toArgb(),
+        clusterLarge = colorScheme.secondary.toArgb(),
+        clusterHuge = colorScheme.error.toArgb(),
+        clusterText = colorScheme.onPrimary.toArgb(),
+        clusterTextHalo = colorScheme.surface.toArgb(),
+        photo = colorScheme.primary.toArgb(),
+        photoStroke = colorScheme.surface.toArgb()
+    )
+    val layerController = remember { PhotoMapLayerController() }
+    val thumbnailImageRegistry = remember { StyleImageRegistry(MaxCachedMapThumbnailImages) }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var isStyleReady by remember { mutableStateOf(false) }
-    var zoomBucket by remember { mutableStateOf(DefaultZoomBucket) }
+    var styleGeneration by remember { mutableStateOf(0) }
+    var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var hasFitCamera by remember { mutableStateOf(false) }
-    var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
-    var bottomGalleryPhotos by remember { mutableStateOf<List<DevicePhoto>>(emptyList()) }
-    val heatIconFactory = remember(context) {
-        HeatIconFactory(context.applicationContext)
+    var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
+    val photosById = remember(photos) {
+        photos.associateBy { photo -> photo.mediaId }
     }
-    val thumbnailIconFactory = remember(context) {
-        ThumbnailIconFactory(context.applicationContext)
+    val latestPhotosById = rememberUpdatedState(photosById)
+    val latestClusterSettings = rememberUpdatedState(clusterSettings)
+    val featureCollection by produceState(
+        initialValue = emptyPhotoFeatureCollection(),
+        photos
+    ) {
+        value = withContext(Dispatchers.Default) {
+            val collection = PhotoMapFeatureMapper.toFeatureCollection(photos)
+            Log.d(PhotoMapLogTag, "GeoJSON built: photos=${photos.size}, features=${collection.features()?.size}")
+            collection
+        }
+    }
+    val cameraPositions = remember(photos) {
+        photos.mapNotNull { photo ->
+            photo.toMapPoint()?.let { point -> LatLng(point.latitude, point.longitude) }
+        }
     }
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply {
             onCreate(Bundle())
             getMapAsync { mapLibreMap ->
+                Log.d(PhotoMapLogTag, "Map is ready")
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
-                mapLibreMap.setStyle(mapStyleUrl) { style ->
-                    style.removePoliticalBoundaryLayers()
-                    isStyleReady = true
-                }
                 mapLibreMap.addOnCameraIdleListener {
-                    zoomBucket = mapLibreMap.cameraPosition.zoom.toZoomBucket()
-                    visibleBounds = mapLibreMap.projection.visibleRegion.latLngBounds
+                    thumbnailRefreshKey += 1
                 }
-            }
-        }
-    }
-    val markers = remember(photos, zoomBucket, visibleBounds, thumbnailThreshold) {
-        photos
-            .toMapMarkers(
-                zoomBucket = zoomBucket,
-                thumbnailThreshold = thumbnailThreshold
-            )
-            .filterByBounds(visibleBounds)
-    }
-    val cameraPositions = remember(photos) {
-        photos.mapNotNull { photo ->
-            val latitude = photo.latitude
-            val longitude = photo.longitude
-            if (latitude != null && longitude != null) {
-                LatLng(latitude, longitude)
-            } else {
-                null
+                mapLibreMap.addOnMapClickListener { point ->
+                    runCatching {
+                        mapLibreMap.handlePhotoMapClick(
+                            point = point,
+                            photosById = latestPhotosById.value,
+                            clusterSettings = latestClusterSettings.value,
+                            onShowPhotos = { state -> bottomGalleryState = state }
+                        )
+                    }.onFailure { error ->
+                        Log.e(PhotoMapLogTag, "Map click handling failed", error)
+                    }.getOrDefault(false)
+                }
+                mapLibreMap.setStyle(mapStyleUrl) { style ->
+                    Log.d(PhotoMapLogTag, "Map style loaded")
+                    runCatching {
+                        style.removePoliticalBoundaryLayers()
+                    }.onFailure { error ->
+                        Log.w(PhotoMapLogTag, "Failed to remove boundary layers", error)
+                    }
+                    layerController.reset()
+                    thumbnailImageRegistry.clear()
+                    isStyleReady = true
+                    styleGeneration += 1
+                    thumbnailRefreshKey += 1
+                }
             }
         }
     }
@@ -327,38 +371,136 @@ private fun PhotoMapLibreMap(
         }
     }
 
-    LaunchedEffect(map, isStyleReady, markers, cameraPositions, thumbnailThreshold, zoomBucket) {
+    LaunchedEffect(
+        map,
+        isStyleReady,
+        styleGeneration,
+        featureCollection,
+        clusterSettings,
+        layerColors
+    ) {
         val mapLibreMap = map ?: return@LaunchedEffect
         if (!isStyleReady) {
             return@LaunchedEffect
         }
 
         mapView.post {
-            val markerLookup = mapLibreMap.renderMarkers(
-                markers = markers,
-                cameraPositions = cameraPositions,
-                fitCamera = !hasFitCamera,
-                heatIconFactory = heatIconFactory,
-                thumbnailIconFactory = thumbnailIconFactory,
-                thumbnailThreshold = thumbnailThreshold,
-                zoomBucket = zoomBucket,
-                clientWidth = mapView.width,
-                clientHeight = mapView.height
-            )
-            mapLibreMap.setOnMarkerClickListener { marker ->
-                val photoMarker = markerLookup[marker.id] ?: return@setOnMarkerClickListener false
-                if (photoMarker.type == PhotoMapMarkerType.SinglePhoto) {
-                    bottomGalleryPhotos = photoMarker.photos
-                } else {
-                    bottomGalleryPhotos = emptyList()
-                    mapLibreMap.fitMarkerPhotos(photoMarker)
-                }
-                true
+            val style = mapLibreMap.getStyle() ?: return@post
+            runCatching {
+                layerController.update(
+                    style = style,
+                    featureCollection = featureCollection,
+                    settings = clusterSettings,
+                    colors = layerColors,
+                    mapMaxZoom = mapLibreMap.getMaxZoomLevel()
+                )
+            }.onSuccess {
+                Log.d(
+                    PhotoMapLogTag,
+                    "Map layers updated: features=${featureCollection.features()?.size}, " +
+                        "radius=${clusterSettings.radiusPx}, minPoints=${clusterSettings.minPoints}, " +
+                        "mapMaxZoom=${mapLibreMap.getMaxZoomLevel()}"
+                )
+                thumbnailRefreshKey += 1
+            }.onFailure { error ->
+                Log.e(PhotoMapLogTag, "Failed to update MapLibre photo layers", error)
             }
         }
+    }
 
-        if (cameraPositions.isNotEmpty()) {
-            hasFitCamera = true
+    LaunchedEffect(
+        map,
+        isStyleReady,
+        styleGeneration,
+        thumbnailRefreshKey,
+        photosById,
+        layerColors
+    ) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady || mapView.width <= 0 || mapView.height <= 0) {
+            return@LaunchedEffect
+        }
+
+        val visiblePhotoIds = mapLibreMap.visibleThumbnailCandidatePhotoIds(
+            photos = photosById.values,
+            width = mapView.width,
+            height = mapView.height
+        )
+        val visibleThumbnailFeatureCollection = withContext(Dispatchers.Default) {
+            PhotoMapFeatureMapper.toFeatureCollection(
+                visiblePhotoIds.mapNotNull { photoId -> photosById[photoId] }
+            )
+        }
+        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        layerController.updateVisibleThumbnails(
+            style = style,
+            featureCollection = visibleThumbnailFeatureCollection
+        )
+        val missingPhotoIds = visiblePhotoIds
+            .filter { photoId -> !thumbnailImageRegistry.contains(photoThumbnailImageKey(photoId)) }
+            .take(MaxThumbnailImagesPerPass)
+        Log.d(
+            PhotoMapLogTag,
+            "Thumbnail refresh: visibleCandidates=${visiblePhotoIds.size}, " +
+                "missing=${missingPhotoIds.size}, cached=${thumbnailImageRegistry.size}"
+        )
+        if (missingPhotoIds.isEmpty()) {
+            return@LaunchedEffect
+        }
+
+        val thumbnailImages = withContext(Dispatchers.IO) {
+            missingPhotoIds.mapNotNull { photoId ->
+                val photo = photosById[photoId] ?: return@mapNotNull null
+                val bitmap = context.createFixedMapThumbnailBitmap(
+                    photoId = photoId,
+                    uriString = photo.uri,
+                    borderColor = layerColors.photoStroke,
+                    backgroundColor = layerColors.photo
+                ) ?: return@mapNotNull null
+                photoThumbnailImageKey(photoId) to bitmap
+            }
+        }
+        var addedCount = 0
+        thumbnailImages.forEach { (key, bitmap) ->
+            val added = runCatching {
+                style.addImage(key, bitmap)
+                thumbnailImageRegistry.markAdded(style, key)
+            }.onFailure { error ->
+                Log.w(PhotoMapLogTag, "Failed to add thumbnail image to style: key=$key", error)
+            }
+            if (added.isSuccess) {
+                addedCount += 1
+            }
+        }
+        Log.d(
+            PhotoMapLogTag,
+            "Thumbnail images registered: added=$addedCount, decoded=${thumbnailImages.size}, cached=${thumbnailImageRegistry.size}"
+        )
+        if (addedCount > 0) {
+            runCatching {
+                layerController.updateVisibleThumbnails(
+                    style = style,
+                    featureCollection = visibleThumbnailFeatureCollection
+                )
+            }.onFailure { error ->
+                Log.w(PhotoMapLogTag, "Failed to refresh thumbnails after image registration", error)
+            }
+        }
+    }
+
+    LaunchedEffect(map, isStyleReady, cameraPositions) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady || hasFitCamera || cameraPositions.isEmpty()) {
+            return@LaunchedEffect
+        }
+
+        mapView.post {
+            runCatching {
+                mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+                hasFitCamera = true
+            }.onFailure { error ->
+                Log.e(PhotoMapLogTag, "Initial camera fit failed", error)
+            }
         }
     }
 
@@ -369,7 +511,11 @@ private fun PhotoMapLibreMap(
         }
 
         mapView.post {
-            mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+            runCatching {
+                mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+            }.onFailure { error ->
+                Log.e(PhotoMapLogTag, "Manual camera fit failed", error)
+            }
         }
     }
 
@@ -379,9 +525,21 @@ private fun PhotoMapLibreMap(
             factory = { mapView }
         )
 
-        if (bottomGalleryPhotos.isNotEmpty()) {
+        bottomGalleryState?.let { state ->
             BottomPhotoGallery(
-                photos = bottomGalleryPhotos,
+                state = state,
+                onLoadMore = {
+                    val mapLibreMap = map ?: return@BottomPhotoGallery
+                    val nextState = mapLibreMap.loadNextClusterPage(
+                        state = state,
+                        photosById = latestPhotosById.value,
+                        pageSize = latestClusterSettings.value.leavesPageSize
+                    )
+                    if (nextState != null) {
+                        bottomGalleryState = nextState
+                    }
+                },
+                onClose = { bottomGalleryState = null },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(12.dp)
@@ -392,35 +550,61 @@ private fun PhotoMapLibreMap(
 
 @Composable
 private fun BottomPhotoGallery(
-    photos: List<DevicePhoto>,
+    state: BottomGalleryState,
+    onLoadMore: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(modifier = modifier.fillMaxWidth()) {
-        Row(
+        Column(
             modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            photos.take(BottomGalleryPreviewCount).forEach { photo ->
-                BottomPhotoThumbnail(photo = photo)
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = state.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                OutlinedButton(onClick = onClose) {
+                    Text(text = "Закрыть")
+                }
+            }
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(
+                    items = state.photos,
+                    key = { photo -> photo.mediaId }
+                ) { photo ->
+                    BottomPhotoThumbnail(photo = photo)
+                }
             }
 
-            val firstPhoto = photos.firstOrNull()
+            val firstPhoto = state.photos.firstOrNull()
             if (firstPhoto != null) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = firstPhoto.displayName ?: "Фото ${firstPhoto.mediaId}",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
                     )
                     Text(
                         text = firstPhoto.dateTaken?.let { millis ->
                             DateFormat.getDateFormat(LocalContext.current).format(Date(millis))
-                        } ?: "Дата съемки неизвестна",
+                        } ?: "Дата съёмки неизвестна",
                         style = MaterialTheme.typography.bodySmall
                     )
+                }
+            }
+
+            if (state.canLoadMore) {
+                OutlinedButton(onClick = onLoadMore) {
+                    Text(text = "Показать ещё")
                 }
             }
         }
@@ -431,13 +615,13 @@ private fun BottomPhotoGallery(
 private fun BottomPhotoThumbnail(photo: DevicePhoto) {
     val context = LocalContext.current
     val thumbnail by produceState<Bitmap?>(initialValue = null, photo.uri) {
-        value = runCatching {
-            context.contentResolver.loadThumbnail(
-                Uri.parse(photo.uri),
-                Size(BottomGalleryThumbnailPx, BottomGalleryThumbnailPx),
-                null
+        value = withContext(Dispatchers.IO) {
+            context.loadPhotoPreviewBitmap(
+                uriString = photo.uri,
+                targetSizePx = BottomGalleryThumbnailPx,
+                photoId = photo.mediaId
             )
-        }.getOrNull()
+        }
     }
 
     if (thumbnail != null) {
@@ -448,176 +632,358 @@ private fun BottomPhotoThumbnail(photo: DevicePhoto) {
             modifier = Modifier.size(76.dp)
         )
     } else {
-        Box(modifier = Modifier.size(76.dp))
+        Surface(
+            modifier = Modifier.size(76.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = "Фото",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 
-private fun MapLibreMap.renderMarkers(
-    markers: List<PhotoMapMarker>,
-    cameraPositions: List<LatLng>,
-    fitCamera: Boolean,
-    heatIconFactory: HeatIconFactory,
-    thumbnailIconFactory: ThumbnailIconFactory,
-    thumbnailThreshold: Int,
-    zoomBucket: Int,
-    clientWidth: Int,
-    clientHeight: Int
-): Map<Long, PhotoMapMarker> {
-    clear()
-    val markerLookup = mutableMapOf<Long, PhotoMapMarker>()
-    val visibleMarkers = expandMarkersForClientWindow(
-        markers = markers,
-        zoomBucket = zoomBucket,
-        clientWidth = clientWidth,
-        clientHeight = clientHeight
-    )
-
-    visibleMarkers.forEach { marker ->
-        val icon = when (marker.type) {
-            PhotoMapMarkerType.Heat -> heatIconFactory.iconFor(
-                count = marker.count,
-                threshold = thumbnailThreshold
+private fun Context.loadPhotoPreviewBitmap(
+    uriString: String,
+    targetSizePx: Int,
+    photoId: Long? = null
+): Bitmap? {
+    val uri = Uri.parse(uriString)
+    return runCatching {
+        contentResolver.loadThumbnail(uri, Size(targetSizePx, targetSizePx), null)
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "ContentResolver.loadThumbnail failed: photoId=$photoId", error)
+    }.getOrNull() ?: runCatching {
+        val source = ImageDecoder.createSource(contentResolver, uri)
+        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            val width = info.size.width.coerceAtLeast(1)
+            val height = info.size.height.coerceAtLeast(1)
+            val scale = (targetSizePx.toFloat() / maxOf(width, height).toFloat()).coerceAtMost(1f)
+            decoder.setTargetSize(
+                (width * scale).roundToInt().coerceAtLeast(1),
+                (height * scale).roundToInt().coerceAtLeast(1)
             )
-            PhotoMapMarkerType.Thumbnail,
-            PhotoMapMarkerType.SinglePhoto -> thumbnailIconFactory.iconFor(
-                marker = marker,
-                zoomBucket = zoomBucket
-            )
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
         }
-        val options = MarkerOptions()
-            .position(marker.position)
-            .title(marker.title)
-            .snippet(marker.snippet)
-            .icon(icon)
-
-        val mapMarker = addMarker(options)
-        markerLookup[mapMarker.id] = marker
-    }
-
-    if (fitCamera) {
-        fitPositions(cameraPositions, MapBoundsPaddingPx)
-    }
-
-    return markerLookup
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "ImageDecoder thumbnail fallback failed: photoId=$photoId", error)
+    }.getOrNull()
 }
 
-private fun MapLibreMap.expandMarkersForClientWindow(
-    markers: List<PhotoMapMarker>,
-    zoomBucket: Int,
-    clientWidth: Int,
-    clientHeight: Int
-): List<PhotoMapMarker> {
-    if (clientWidth <= 0 || clientHeight <= 0) {
-        return markers
-    }
+private fun MapLibreMap.handlePhotoMapClick(
+    point: LatLng,
+    photosById: Map<Long, DevicePhoto>,
+    clusterSettings: PhotoClusterSettings,
+    onShowPhotos: (BottomGalleryState) -> Unit
+): Boolean {
+    val photoIds = photoIdsNearTap(
+        point = point,
+        photos = photosById.values,
+        hitSlopPx = MapTapHitSlopPx,
+        maxResults = clusterSettings.leavesPageSize
+    )
+    Log.d(PhotoMapLogTag, "Photo projection hit-test: photoIds=${photoIds.distinct().size}")
 
-    return markers.flatMap { marker ->
-        when {
-            marker.count == 1 -> listOf(marker)
-            hasSpaceForSinglePhotos(marker, zoomBucket, clientWidth, clientHeight) -> {
-                marker.photos.map { photo -> photo.toSinglePhotoMarker() }
-            }
-            isInsideClientWindow(marker.position, clientWidth, clientHeight, MarkerClientPaddingPx) -> {
-                listOf(marker)
-            }
-            else -> {
-                marker.photos
-                    .filter { photo -> isInsideClientWindow(photo, clientWidth, clientHeight, MarkerClientPaddingPx) }
-                    .map { photo -> photo.toSinglePhotoMarker() }
+    return when (val action = PhotoMapClickDecision.forUnclustered(photoIds)) {
+        PhotoMapTapAction.NoAction,
+        is PhotoMapTapAction.ZoomToCluster,
+        is PhotoMapTapAction.ShowClusterPhotos -> false
+
+        is PhotoMapTapAction.OpenPhoto -> {
+            val photo = photosById[action.photoId] ?: return false
+            onShowPhotos(BottomGalleryState(photos = listOf(photo)))
+            true
+        }
+
+        is PhotoMapTapAction.ShowPhotos -> {
+            val photos = action.photoIds.mapNotNull { photoId -> photosById[photoId] }
+            if (photos.isNotEmpty()) {
+                onShowPhotos(BottomGalleryState(photos = photos))
+                true
+            } else {
+                false
             }
         }
     }
 }
 
-private fun MapLibreMap.hasSpaceForSinglePhotos(
-    marker: PhotoMapMarker,
-    zoomBucket: Int,
-    clientWidth: Int,
-    clientHeight: Int
-): Boolean {
-    if (marker.count > MaxAutoSplitPhotos || marker.photoPositions.size <= 1) {
-        return false
-    }
+private fun MapLibreMap.photoIdsNearTap(
+    point: LatLng,
+    photos: Collection<DevicePhoto>,
+    hitSlopPx: Float,
+    maxResults: Int
+): List<Long> {
+    val screenPoint = projection.toScreenLocation(point)
+    val hitSlopSquared = hitSlopPx * hitSlopPx
+    return runCatching {
+        photos.asSequence()
+            .mapNotNull { photo ->
+                val photoPoint = photo.toMapPoint() ?: return@mapNotNull null
+                val projected = projection.toScreenLocation(LatLng(photoPoint.latitude, photoPoint.longitude))
+                val dx = projected.x - screenPoint.x
+                val dy = projected.y - screenPoint.y
+                val distance = dx * dx + dy * dy
+                if (distance > hitSlopSquared) {
+                    return@mapNotNull null
+                }
 
-    val size = zoomBucket.thumbnailIconSize()
-    val markerPadding = (size.width / 2).coerceAtLeast(MarkerClientPaddingPx)
-    val points = marker.photoPositions.map { position ->
-        projection.toScreenLocation(position)
-    }
-
-    if (!points.all { point -> point.isInsideClientWindow(clientWidth, clientHeight, markerPadding) }) {
-        return false
-    }
-
-    val minDistance = size.width * SinglePhotoSplitSpacingFactor
-    val minDistanceSquared = minDistance * minDistance
-    for (index in points.indices) {
-        for (otherIndex in index + 1 until points.size) {
-            val dx = (points[index].x - points[otherIndex].x).toDouble()
-            val dy = (points[index].y - points[otherIndex].y).toDouble()
-            if (dx * dx + dy * dy < minDistanceSquared) {
-                return false
+                VisiblePhotoCandidate(
+                    photoId = photo.mediaId,
+                    distanceFromCenter = distance
+                )
             }
-        }
+            .sortedBy { candidate -> candidate.distanceFromCenter }
+            .take(maxResults.coerceAtLeast(1))
+            .map { candidate -> candidate.photoId }
+            .toList()
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to calculate photo tap candidates", error)
+    }.getOrDefault(emptyList())
+}
+
+private fun MapLibreMap.loadNextClusterPage(
+    state: BottomGalleryState,
+    photosById: Map<Long, DevicePhoto>,
+    pageSize: Int
+): BottomGalleryState? {
+    val clusterFeature = state.clusterFeature ?: return null
+    if (!state.canLoadMore) {
+        return null
     }
 
-    return true
-}
+    val photos = loadClusterPhotos(
+        clusterFeature = clusterFeature,
+        photosById = photosById,
+        pageSize = pageSize,
+        offset = state.photos.size.toLong()
+    )
+    if (photos.isEmpty()) {
+        return state.copy(totalCount = state.photos.size)
+    }
 
-private fun MapLibreMap.isInsideClientWindow(
-    photo: DevicePhoto,
-    clientWidth: Int,
-    clientHeight: Int,
-    padding: Int
-): Boolean {
-    val latitude = photo.latitude ?: return false
-    val longitude = photo.longitude ?: return false
-    return isInsideClientWindow(LatLng(latitude, longitude), clientWidth, clientHeight, padding)
-}
-
-private fun MapLibreMap.isInsideClientWindow(
-    position: LatLng,
-    clientWidth: Int,
-    clientHeight: Int,
-    padding: Int
-): Boolean {
-    return projection
-        .toScreenLocation(position)
-        .isInsideClientWindow(clientWidth, clientHeight, padding)
-}
-
-private fun android.graphics.PointF.isInsideClientWindow(
-    clientWidth: Int,
-    clientHeight: Int,
-    padding: Int
-): Boolean {
-    return x >= padding &&
-        y >= padding &&
-        x <= clientWidth - padding &&
-        y <= clientHeight - padding
-}
-
-private fun DevicePhoto.toSinglePhotoMarker(): PhotoMapMarker {
-    val position = LatLng(requireNotNull(latitude), requireNotNull(longitude))
-    return PhotoMapMarker(
-        id = mediaId.toString(),
-        title = displayName ?: "Photo $mediaId",
-        snippet = uri,
-        position = position,
-        count = 1,
-        thumbnailUri = uri,
-        type = PhotoMapMarkerType.SinglePhoto,
-        photos = listOf(this),
-        photoPositions = listOf(position)
+    return state.copy(
+        photos = (state.photos + photos).distinctBy { photo -> photo.mediaId }
     )
 }
 
-private fun MapLibreMap.fitMarkerPhotos(marker: PhotoMapMarker) {
-    fitPositions(
-        positions = marker.photoPositions,
-        padding = MarkerClickBoundsPaddingPx,
-        singlePositionZoom = (cameraPosition.zoom + MarkerClickZoomStep).coerceAtMost(MaxClickZoom)
+private fun MapLibreMap.loadClusterPhotos(
+    clusterFeature: Feature,
+    photosById: Map<Long, DevicePhoto>,
+    pageSize: Int,
+    offset: Long
+): List<DevicePhoto> {
+    val source = getStyle()?.getSourceAs<GeoJsonSource>(PHOTO_MAP_SOURCE_ID)
+    if (source == null) {
+        Log.w(PhotoMapLogTag, "Cluster leaves requested before source is available")
+        return emptyList()
+    }
+    val leaves = runCatching {
+        source.getClusterLeaves(clusterFeature, pageSize.toLong(), offset).features()
+    }.onFailure { error ->
+        Log.e(PhotoMapLogTag, "Failed to load cluster leaves: pageSize=$pageSize, offset=$offset", error)
+    }.getOrNull().orEmpty()
+
+    return leaves.mapNotNull { feature ->
+        feature.photoId()?.let { photoId -> photosById[photoId] }
+    }
+}
+
+private fun Feature.clusterLatLngOr(fallback: LatLng): LatLng {
+    val point = geometry() as? Point ?: return fallback
+    return LatLng(point.latitude(), point.longitude())
+}
+
+private fun Feature.pointCount(): Int? {
+    return getNumberProperty("point_count")?.toInt()
+}
+
+private fun MapLibreMap.visibleThumbnailCandidatePhotoIds(
+    photos: Collection<DevicePhoto>,
+    width: Int,
+    height: Int
+): List<Long> {
+    if (width <= 0 || height <= 0 || photos.isEmpty()) {
+        return emptyList()
+    }
+
+    val minX = -MapThumbnailPreloadPaddingPx
+    val minY = -MapThumbnailPreloadPaddingPx
+    val maxX = width + MapThumbnailPreloadPaddingPx
+    val maxY = height + MapThumbnailPreloadPaddingPx
+    val centerX = width / 2f
+    val centerY = height / 2f
+    return runCatching {
+        photos.asSequence()
+            .mapNotNull { photo ->
+                val point = photo.toMapPoint() ?: return@mapNotNull null
+                val screenPoint = projection.toScreenLocation(LatLng(point.latitude, point.longitude))
+                if (screenPoint.x !in minX..maxX || screenPoint.y !in minY..maxY) {
+                    return@mapNotNull null
+                }
+
+                val dx = screenPoint.x - centerX
+                val dy = screenPoint.y - centerY
+                VisiblePhotoCandidate(
+                    photoId = photo.mediaId,
+                    distanceFromCenter = dx * dx + dy * dy
+                )
+            }
+            .sortedBy { candidate -> candidate.distanceFromCenter }
+            .take(MaxThumbnailCandidatePhotoIds)
+            .map { candidate -> candidate.photoId }
+            .toList()
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to calculate visible thumbnail candidates", error)
+    }.getOrDefault(emptyList())
+}
+
+private fun Context.createFixedMapThumbnailBitmap(
+    photoId: Long,
+    uriString: String,
+    borderColor: Int,
+    backgroundColor: Int
+): Bitmap? {
+    return runCatching {
+        createFixedMapThumbnailBitmapOrThrow(
+            photoId = photoId,
+            uriString = uriString,
+            borderColor = borderColor,
+            backgroundColor = backgroundColor
+        )
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to create map thumbnail bitmap: photoId=$photoId", error)
+    }.getOrNull()
+}
+
+private fun Context.createFixedMapThumbnailBitmapOrThrow(
+    photoId: Long,
+    uriString: String,
+    borderColor: Int,
+    backgroundColor: Int
+): Bitmap {
+    val width = mapThumbnailWidthPx()
+    val height = mapThumbnailHeightPx()
+    val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+    val outerRect = RectF(0f, 0f, width.toFloat(), height.toFloat())
+    val imageInset = MapThumbnailBorderPx
+    val imageRect = RectF(
+        imageInset,
+        imageInset,
+        width - imageInset,
+        height - imageInset
     )
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = backgroundColor
+        style = Paint.Style.FILL
+    }
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = borderColor
+        style = Paint.Style.STROKE
+        strokeWidth = MapThumbnailBorderPx
+    }
+    val image = loadPhotoPreviewBitmap(
+        uriString = uriString,
+        targetSizePx = max(width, height),
+        photoId = photoId
+    )?.toSoftwareBitmapForCanvas(photoId)
+
+    canvas.drawRoundRect(outerRect, MapThumbnailCornerRadiusPx, MapThumbnailCornerRadiusPx, backgroundPaint)
+    if (image != null) {
+        val path = Path().apply {
+            addRoundRect(imageRect, MapThumbnailInnerCornerRadiusPx, MapThumbnailInnerCornerRadiusPx, Path.Direction.CW)
+        }
+        val saveCount = canvas.save()
+        canvas.clipPath(path)
+        canvas.drawBitmap(image, image.centerCropSourceRect(imageRect), imageRect, Paint(Paint.ANTI_ALIAS_FLAG))
+        canvas.restoreToCount(saveCount)
+    } else {
+        Log.w(PhotoMapLogTag, "Map thumbnail uses placeholder because bitmap is null: photoId=$photoId")
+    }
+    canvas.drawRoundRect(
+        RectF(
+            MapThumbnailBorderPx / 2f,
+            MapThumbnailBorderPx / 2f,
+            width - MapThumbnailBorderPx / 2f,
+            height - MapThumbnailBorderPx / 2f
+        ),
+        MapThumbnailCornerRadiusPx,
+        MapThumbnailCornerRadiusPx,
+        borderPaint
+    )
+
+    return result
+}
+
+private data class VisiblePhotoCandidate(
+    val photoId: Long,
+    val distanceFromCenter: Float
+)
+
+private fun Bitmap.toSoftwareBitmapForCanvas(photoId: Long): Bitmap? {
+    if (config != Bitmap.Config.HARDWARE) {
+        return this
+    }
+
+    return runCatching {
+        copy(Bitmap.Config.ARGB_8888, false)
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to copy hardware bitmap for map thumbnail: photoId=$photoId", error)
+    }.getOrNull()
+}
+
+private fun Bitmap.centerCropSourceRect(targetRect: RectF): Rect {
+    val targetAspect = targetRect.width() / targetRect.height()
+    val sourceAspect = width.toFloat() / height.toFloat()
+    return if (sourceAspect > targetAspect) {
+        val cropWidth = (height * targetAspect).roundToInt().coerceAtLeast(1)
+        val left = ((width - cropWidth) / 2).coerceAtLeast(0)
+        Rect(left, 0, (left + cropWidth).coerceAtMost(width), height)
+    } else {
+        val cropHeight = (width / targetAspect).roundToInt().coerceAtLeast(1)
+        val top = ((height - cropHeight) / 2).coerceAtLeast(0)
+        Rect(0, top, width, (top + cropHeight).coerceAtMost(height))
+    }
+}
+
+private fun Context.mapThumbnailWidthPx(): Int {
+    return (MapThumbnailWidthDp * resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
+}
+
+private fun Context.mapThumbnailHeightPx(): Int {
+    return (MapThumbnailHeightDp * resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
+}
+
+private class StyleImageRegistry(
+    private val maxSize: Int
+) {
+    private val keys = LinkedHashSet<String>()
+
+    val size: Int
+        get() = keys.size
+
+    fun contains(key: String): Boolean {
+        return keys.contains(key)
+    }
+
+    fun markAdded(style: Style, key: String) {
+        keys.remove(key)
+        keys.add(key)
+        while (keys.size > maxSize) {
+            val oldestKey = keys.first()
+            keys.remove(oldestKey)
+            runCatching { style.removeImage(oldestKey) }
+        }
+    }
+
+    fun clear() {
+        keys.clear()
+    }
 }
 
 private fun MapLibreMap.fitPositions(
@@ -668,250 +1034,6 @@ private fun String.isPoliticalBoundaryLayerId(): Boolean {
         BoundaryLayerTokens.any { token -> normalized.contains(token) }
 }
 
-private fun List<PhotoMapMarker>.filterByBounds(bounds: LatLngBounds?): List<PhotoMapMarker> {
-    if (bounds == null) {
-        return this
-    }
-
-    return filter { marker ->
-        bounds.contains(marker.position) || marker.photoPositions.any { position -> bounds.contains(position) }
-    }
-}
-
-private fun List<DevicePhoto>.toMapMarkers(
-    zoomBucket: Int,
-    thumbnailThreshold: Int
-): List<PhotoMapMarker> {
-    return groupBy { photo ->
-        val latitude = requireNotNull(photo.latitude)
-        val longitude = requireNotNull(photo.longitude)
-        val cellSize = zoomBucket.cellSize()
-        "${floor(latitude / cellSize).toInt()}:${floor(longitude / cellSize).toInt()}"
-    }.map { (cellId, groupedPhotos) ->
-        val count = groupedPhotos.size
-        val sortedPhotos = groupedPhotos.sortedByDescending { photo ->
-            photo.dateTaken ?: photo.dateModified ?: photo.dateAdded ?: 0L
-        }
-        val newestPhoto = sortedPhotos.first()
-        val photoPositions = sortedPhotos.map { photo ->
-            LatLng(requireNotNull(photo.latitude), requireNotNull(photo.longitude))
-        }
-        val position = if (count == 1) {
-            photoPositions.first()
-        } else {
-            photoPositions.averagePosition()
-        }
-        val type = when {
-            count == 1 -> PhotoMapMarkerType.SinglePhoto
-            count >= thumbnailThreshold -> PhotoMapMarkerType.Thumbnail
-            else -> PhotoMapMarkerType.Heat
-        }
-
-        PhotoMapMarker(
-            id = if (count == 1) newestPhoto.mediaId.toString() else cellId,
-            title = if (count == 1) {
-                newestPhoto.displayName ?: "Фото ${newestPhoto.mediaId}"
-            } else {
-                "Фотографий: $count"
-            },
-            snippet = if (count == 1) {
-                newestPhoto.uri
-            } else {
-                groupedPhotos.joinToString(limit = 3) { photo ->
-                    photo.displayName ?: "Фото ${photo.mediaId}"
-                }
-            },
-            position = position,
-            count = count,
-            thumbnailUri = newestPhoto.uri,
-            type = type,
-            photos = sortedPhotos,
-            photoPositions = photoPositions
-        )
-    }
-}
-
-private fun List<LatLng>.averagePosition(): LatLng {
-    return LatLng(
-        (sumOf { position -> position.latitude } / size).coerceIn(-90.0, 90.0),
-        (sumOf { position -> position.longitude } / size).coerceIn(-180.0, 180.0)
-    )
-}
-
-private class HeatIconFactory(context: Context) {
-    private val iconFactory = IconFactory.getInstance(context)
-    private val cache = mutableMapOf<String, MapIcon>()
-
-    fun iconFor(count: Int, threshold: Int): MapIcon {
-        val bucket = when {
-            count <= 1 -> 1
-            count < threshold / 2 -> 2
-            else -> 3
-        }
-        val key = "$bucket:$threshold"
-        return cache.getOrPut(key) {
-            iconFactory.fromBitmap(createHeatBitmap(bucket))
-        }
-    }
-
-    private fun createHeatBitmap(bucket: Int): Bitmap {
-        val width = HeatIconBaseWidthPx + bucket * 42
-        val height = HeatIconBaseHeightPx + bucket * 28
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val centerX = width / 2f
-        val centerY = height / 2f
-        val rings = listOf(
-            Ring(0.98f, Color.argb(42 + bucket * 14, 255, 193, 7)),
-            Ring(0.66f, Color.argb(66 + bucket * 16, 255, 112, 67)),
-            Ring(0.34f, Color.argb(102 + bucket * 20, 198, 40, 40))
-        )
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-        }
-
-        rings.forEach { ring ->
-            paint.color = ring.color
-            val ringWidth = width * ring.radius
-            val ringHeight = height * ring.radius
-            canvas.drawOval(
-                RectF(
-                    centerX - ringWidth / 2f,
-                    centerY - ringHeight / 2f,
-                    centerX + ringWidth / 2f,
-                    centerY + ringHeight / 2f
-                ),
-                paint
-            )
-        }
-
-        return bitmap
-    }
-}
-
-private class ThumbnailIconFactory(context: Context) {
-    private val appContext = context.applicationContext
-    private val iconFactory = IconFactory.getInstance(appContext)
-    private val cache = mutableMapOf<String, MapIcon>()
-
-    fun iconFor(marker: PhotoMapMarker, zoomBucket: Int): MapIcon {
-        val size = zoomBucket.thumbnailIconSize()
-        val key = "${marker.thumbnailUri}:${marker.count}:$size:${marker.type}"
-        return cache.getOrPut(key) {
-            iconFactory.fromBitmap(
-                createThumbnailBitmap(
-                    uriString = marker.thumbnailUri,
-                    count = marker.count,
-                    width = size.width,
-                    height = size.height,
-                    showBadge = marker.type == PhotoMapMarkerType.Thumbnail
-                )
-            )
-        }
-    }
-
-    private fun createThumbnailBitmap(
-        uriString: String?,
-        count: Int,
-        width: Int,
-        height: Int,
-        showBadge: Boolean
-    ): Bitmap {
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            style = Paint.Style.FILL
-        }
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(32, 104, 94)
-            strokeWidth = 4f
-            style = Paint.Style.STROKE
-        }
-        val bottomInset = if (showBadge) ThumbnailBadgeHeightPx else 4
-        val thumbnailRect = RectF(4f, 4f, width - 4f, height - bottomInset.toFloat())
-
-        canvas.drawRoundRect(
-            RectF(0f, 0f, width.toFloat(), height.toFloat()),
-            16f,
-            16f,
-            backgroundPaint
-        )
-        drawThumbnail(canvas, thumbnailRect, uriString)
-        canvas.drawRoundRect(
-            RectF(2f, 2f, width - 2f, height - 2f),
-            16f,
-            16f,
-            borderPaint
-        )
-        if (showBadge) {
-            drawBadge(canvas, count, width, height)
-        }
-
-        return bitmap
-    }
-
-    private fun drawThumbnail(canvas: Canvas, rect: RectF, uriString: String?) {
-        val thumbnail = uriString?.let { uri ->
-            runCatching {
-                appContext.contentResolver.loadThumbnail(
-                    Uri.parse(uri),
-                    Size(ThumbnailLoadSizePx, ThumbnailLoadSizePx),
-                    null
-                )
-            }.getOrNull()
-        }
-
-        if (thumbnail == null) {
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.rgb(225, 235, 232)
-                style = Paint.Style.FILL
-            }
-            canvas.drawRoundRect(rect, 12f, 12f, paint)
-            return
-        }
-
-        val path = Path().apply {
-            addRoundRect(rect, 12f, 12f, Path.Direction.CW)
-        }
-        val saveCount = canvas.save()
-        canvas.clipPath(path)
-        canvas.drawBitmap(
-            thumbnail,
-            null,
-            Rect(
-                rect.left.toInt(),
-                rect.top.toInt(),
-                rect.right.toInt(),
-                rect.bottom.toInt()
-            ),
-            Paint(Paint.ANTI_ALIAS_FLAG)
-        )
-        canvas.restoreToCount(saveCount)
-    }
-
-    private fun drawBadge(canvas: Canvas, count: Int, width: Int, height: Int) {
-        val label = "+${(count - 1).coerceAtLeast(0)} фото"
-        val badgeRect = RectF(10f, height - 36f, width - 10f, height - 8f)
-        val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(32, 104, 94)
-            style = Paint.Style.FILL
-        }
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textAlign = Paint.Align.CENTER
-            textSize = 18f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-
-        canvas.drawRoundRect(badgeRect, 14f, 14f, badgePaint)
-
-        val textBounds = Rect()
-        textPaint.getTextBounds(label, 0, label.length, textBounds)
-        canvas.drawText(label, badgeRect.centerX(), badgeRect.centerY() - textBounds.exactCenterY(), textPaint)
-    }
-}
-
 private fun scanStatusText(isPaused: Boolean, processed: Int, total: Int): String {
     val prefix = if (isPaused) "Пауза" else "Сканирование"
     return if (total > 0) {
@@ -921,64 +1043,41 @@ private fun scanStatusText(isPaused: Boolean, processed: Int, total: Int): Strin
     }
 }
 
-private fun Double.toZoomBucket(): Int {
-    return when {
-        this < 6.0 -> 1
-        this < 10.0 -> 2
-        this < 13.0 -> 3
-        this < 15.0 -> 4
-        this < 17.0 -> 5
-        else -> 6
-    }
+private fun emptyPhotoFeatureCollection(): FeatureCollection {
+    return FeatureCollection.fromFeatures(emptyList<Feature>())
 }
 
-private fun Int.cellSize(): Double {
-    return when (this) {
-        1 -> 5.0
-        2 -> 1.0
-        3 -> 0.25
-        4 -> 0.05
-        5 -> 0.01
-        else -> 0.002
-    }
+private data class BottomGalleryState(
+    val photos: List<DevicePhoto>,
+    val totalCount: Int? = null,
+    val clusterFeature: Feature? = null
+) {
+    val canLoadMore: Boolean
+        get() = clusterFeature != null && totalCount != null && photos.size < totalCount
+
+    val title: String
+        get() = when {
+            totalCount != null && canLoadMore -> "Фотографий: ${photos.size} из $totalCount"
+            totalCount != null -> "Фотографий: $totalCount"
+            photos.size == 1 -> "Фотография"
+            else -> "Фотографий: ${photos.size}"
+        }
 }
 
-private fun Int.thumbnailIconSize(): IconSize {
-    return when (this) {
-        1 -> IconSize(width = 88, height = 80)
-        2 -> IconSize(width = 104, height = 92)
-        3 -> IconSize(width = 122, height = 108)
-        4 -> IconSize(width = 140, height = 124)
-        5 -> IconSize(width = 158, height = 140)
-        else -> IconSize(width = 176, height = 156)
-    }
-}
-
-private data class Ring(
-    val radius: Float,
-    val color: Int
-)
-
-private data class IconSize(
-    val width: Int,
-    val height: Int
-)
-
-private const val DefaultZoomBucket = 1
 private const val MapBoundsPaddingPx = 120
-private const val MarkerClickBoundsPaddingPx = 180
-private const val MarkerClickZoomStep = 2.0
 private const val InitialSinglePhotoZoom = 14.0
-private const val MaxClickZoom = 18.0
-private const val MarkerClientPaddingPx = 24
-private const val MaxAutoSplitPhotos = 24
-private const val SinglePhotoSplitSpacingFactor = 0.9
-private const val HeatIconBaseWidthPx = 190
-private const val HeatIconBaseHeightPx = 120
-private const val ThumbnailBadgeHeightPx = 40
-private const val ThumbnailLoadSizePx = 96
-private const val BottomGalleryPreviewCount = 4
+private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160
+private const val MapThumbnailWidthDp = 56f
+private const val MapThumbnailHeightDp = 56f
+private const val MapThumbnailBorderPx = 4f
+private const val MapThumbnailCornerRadiusPx = 14f
+private const val MapThumbnailInnerCornerRadiusPx = 10f
+private const val MapThumbnailPreloadPaddingPx = 96f
+private const val MaxCachedMapThumbnailImages = 360
+private const val MaxThumbnailCandidatePhotoIds = 240
+private const val MaxThumbnailImagesPerPass = 80
+private const val PhotoMapLogTag = "PhotoMapMap"
 
 private const val LandFillColor = "#E7ECE6"
 

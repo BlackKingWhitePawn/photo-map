@@ -5,6 +5,18 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.photomap.core.permissions.PhotoPermissionManager
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MIN_POINTS
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MIN_POINTS
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP
+import com.example.photomap.core.settings.PHOTO_CLUSTER_MIN_POINTS
+import com.example.photomap.core.settings.PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.PHOTO_CLUSTER_RADIUS_STEP
+import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
 import com.example.photomap.data.media.PhotoReadControl
@@ -26,10 +38,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState = MutableStateFlow(
         PhotoAccessUiState(
             permissionStatus = PhotoPermissionManager.checkStatus(application),
-            heatmapThumbnailThreshold = settings.getInt(
-                HeatmapThumbnailThresholdKey,
-                DefaultHeatmapThumbnailThreshold
-            )
+            clusterSettings = readClusterSettings()
         )
     )
     val uiState: StateFlow<PhotoAccessUiState> = _uiState
@@ -193,19 +202,39 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun increaseHeatmapThumbnailThreshold() {
-        setHeatmapThumbnailThreshold(uiState.value.heatmapThumbnailThreshold + 1)
+    fun increaseClusterRadius() {
+        updateClusterSettings {
+            copy(radiusPx = radiusPx + PHOTO_CLUSTER_RADIUS_STEP)
+        }
     }
 
-    fun decreaseHeatmapThumbnailThreshold() {
-        setHeatmapThumbnailThreshold(uiState.value.heatmapThumbnailThreshold - 1)
+    fun decreaseClusterRadius() {
+        updateClusterSettings {
+            copy(radiusPx = radiusPx - PHOTO_CLUSTER_RADIUS_STEP)
+        }
     }
 
-    private fun setHeatmapThumbnailThreshold(value: Int) {
-        val threshold = value.coerceIn(MinHeatmapThumbnailThreshold, MaxHeatmapThumbnailThreshold)
-        settings.edit().putInt(HeatmapThumbnailThresholdKey, threshold).apply()
-        _uiState.update { state ->
-            state.copy(heatmapThumbnailThreshold = threshold)
+    fun increaseClusterMinPoints() {
+        updateClusterSettings {
+            copy(minPoints = minPoints + 1)
+        }
+    }
+
+    fun decreaseClusterMinPoints() {
+        updateClusterSettings {
+            copy(minPoints = minPoints - 1)
+        }
+    }
+
+    fun increaseClusterLeavesPageSize() {
+        updateClusterSettings {
+            copy(leavesPageSize = leavesPageSize + PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP)
+        }
+    }
+
+    fun decreaseClusterLeavesPageSize() {
+        updateClusterSettings {
+            copy(leavesPageSize = leavesPageSize - PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP)
         }
     }
 
@@ -240,10 +269,38 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
 
     private companion object {
         const val SettingsName = "photo_map_settings"
-        const val HeatmapThumbnailThresholdKey = "heatmap_thumbnail_threshold"
-        const val DefaultHeatmapThumbnailThreshold = 8
-        const val MinHeatmapThumbnailThreshold = 2
-        const val MaxHeatmapThumbnailThreshold = 99
+        const val ClusterRadiusKey = "cluster_radius_px"
+        const val ClusterMinPointsKey = "cluster_min_points"
+        const val ClusterLeavesPageSizeKey = "cluster_leaves_page_size"
+    }
+
+    private fun readClusterSettings(): PhotoClusterSettings {
+        return PhotoClusterSettings(
+            radiusPx = settings.getInt(ClusterRadiusKey, PHOTO_CLUSTER_RADIUS),
+            minPoints = settings.getInt(ClusterMinPointsKey, PHOTO_CLUSTER_MIN_POINTS),
+            leavesPageSize = settings.getInt(ClusterLeavesPageSizeKey, PHOTO_CLUSTER_LEAVES_PAGE_SIZE)
+        ).normalized()
+    }
+
+    private fun updateClusterSettings(transform: PhotoClusterSettings.() -> PhotoClusterSettings) {
+        val nextSettings = uiState.value.clusterSettings.transform().normalized()
+        settings.edit()
+            .putInt(ClusterRadiusKey, nextSettings.radiusPx.coerceIn(MIN_PHOTO_CLUSTER_RADIUS, MAX_PHOTO_CLUSTER_RADIUS))
+            .putInt(
+                ClusterMinPointsKey,
+                nextSettings.minPoints.coerceIn(MIN_PHOTO_CLUSTER_MIN_POINTS, MAX_PHOTO_CLUSTER_MIN_POINTS)
+            )
+            .putInt(
+                ClusterLeavesPageSizeKey,
+                nextSettings.leavesPageSize.coerceIn(
+                    MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE,
+                    MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+                )
+            )
+            .apply()
+        _uiState.update { state ->
+            state.copy(clusterSettings = nextSettings)
+        }
     }
 }
 

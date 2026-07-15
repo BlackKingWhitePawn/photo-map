@@ -48,7 +48,7 @@ fun PhotoMapApp(
         AppScreen.Map -> PhotoMapScreen(
             photos = state.photos,
             mapStyleUrl = BuildConfig.MAP_STYLE_URL,
-            thumbnailThreshold = state.heatmapThumbnailThreshold,
+            clusterSettings = state.clusterSettings,
             isScanning = state.isLoading,
             isScanPaused = state.isScanPaused,
             scanProcessed = state.scanProcessed,
@@ -69,8 +69,12 @@ fun PhotoMapApp(
             onPause = viewModel::pauseCurrentAction,
             onResume = viewModel::resumeCurrentAction,
             onCancel = viewModel::cancelCurrentAction,
-            onDecreaseThreshold = viewModel::decreaseHeatmapThumbnailThreshold,
-            onIncreaseThreshold = viewModel::increaseHeatmapThumbnailThreshold
+            onDecreaseClusterRadius = viewModel::decreaseClusterRadius,
+            onIncreaseClusterRadius = viewModel::increaseClusterRadius,
+            onDecreaseClusterMinPoints = viewModel::decreaseClusterMinPoints,
+            onIncreaseClusterMinPoints = viewModel::increaseClusterMinPoints,
+            onDecreaseClusterLeavesPageSize = viewModel::decreaseClusterLeavesPageSize,
+            onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize
         )
     }
 }

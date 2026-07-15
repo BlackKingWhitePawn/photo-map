@@ -24,6 +24,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.photomap.BuildConfig
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MIN_POINTS
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MIN_POINTS
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 
 @Composable
@@ -35,8 +41,12 @@ fun PhotoMapSettingsScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
-    onDecreaseThreshold: () -> Unit,
-    onIncreaseThreshold: () -> Unit
+    onDecreaseClusterRadius: () -> Unit,
+    onIncreaseClusterRadius: () -> Unit,
+    onDecreaseClusterMinPoints: () -> Unit,
+    onIncreaseClusterMinPoints: () -> Unit,
+    onDecreaseClusterLeavesPageSize: () -> Unit,
+    onIncreaseClusterLeavesPageSize: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -60,19 +70,29 @@ fun PhotoMapSettingsScreen(
                 fontWeight = FontWeight.SemiBold
             )
 
-            SettingsCard(title = "Карта") {
-                Text(
-                    text = "Миниатюра появляется, когда в heat-ячейке не меньше ${state.heatmapThumbnailThreshold} фото.",
-                    style = MaterialTheme.typography.bodyMedium
+            SettingsCard(title = "Кластеризация карты") {
+                val clusterSettings = state.clusterSettings
+                SettingsStepper(
+                    title = "Радиус кластера",
+                    value = "${clusterSettings.radiusPx} px",
+                    range = "$MIN_PHOTO_CLUSTER_RADIUS-$MAX_PHOTO_CLUSTER_RADIUS px",
+                    onDecrease = onDecreaseClusterRadius,
+                    onIncrease = onIncreaseClusterRadius
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onDecreaseThreshold) {
-                        Text(text = "-")
-                    }
-                    Button(onClick = onIncreaseThreshold) {
-                        Text(text = "+")
-                    }
-                }
+                SettingsStepper(
+                    title = "Минимум точек",
+                    value = clusterSettings.minPoints.toString(),
+                    range = "$MIN_PHOTO_CLUSTER_MIN_POINTS-$MAX_PHOTO_CLUSTER_MIN_POINTS",
+                    onDecrease = onDecreaseClusterMinPoints,
+                    onIncrease = onIncreaseClusterMinPoints
+                )
+                SettingsStepper(
+                    title = "Страница списка",
+                    value = "${clusterSettings.leavesPageSize} фото",
+                    range = "$MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE-$MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE",
+                    onDecrease = onDecreaseClusterLeavesPageSize,
+                    onIncrease = onIncreaseClusterLeavesPageSize
+                )
             }
 
             SettingsCard(title = "Индексирование") {
@@ -164,6 +184,35 @@ private fun SettingsCard(
                 fontWeight = FontWeight.SemiBold
             )
             content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsStepper(
+    title: String,
+    value: String,
+    range: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "$title: $value",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            text = "Диапазон: $range",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onDecrease) {
+                Text(text = "-")
+            }
+            Button(onClick = onIncrease) {
+                Text(text = "+")
+            }
         }
     }
 }

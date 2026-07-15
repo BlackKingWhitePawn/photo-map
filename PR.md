@@ -25,6 +25,8 @@ Not included:
 ## Checks
 
 * `.\gradlew.bat assembleDebug` - passed.
+* APK permissions inspected with `aapt2 dump permissions`.
+* Source checked for MediaStore delete/write operations.
 
 The command was run with `JAVA_HOME` set to Android Studio JBR for the current process:
 
@@ -41,3 +43,14 @@ On a device or emulator with photos:
 3. Grant full or selected photo access.
 4. Confirm the screen shows the number of found photos.
 5. Check Logcat tag `PhotoMapMediaStore` for scanned photo entries.
+
+## Safety
+
+The app only requests read-oriented media permissions:
+
+* `READ_EXTERNAL_STORAGE` with `maxSdkVersion=32`;
+* `READ_MEDIA_IMAGES`;
+* `READ_MEDIA_VISUAL_USER_SELECTED`;
+* `ACCESS_MEDIA_LOCATION`.
+
+No source code path deletes, trashes, writes, updates, moves, or overwrites user photos.

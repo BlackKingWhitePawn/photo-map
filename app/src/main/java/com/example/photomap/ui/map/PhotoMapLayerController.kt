@@ -2,6 +2,7 @@ package com.example.photomap.ui.map
 
 import android.util.Log
 import com.example.photomap.core.settings.PhotoClusterSettings
+import com.example.photomap.core.util.AppDiagnostics
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
@@ -47,10 +48,20 @@ class PhotoMapLayerController {
                     "radius=${sourceKey.radiusPx}, minPoints=${sourceKey.minPoints}, " +
                     "markerScale=${sourceKey.markerScalePercent}"
             )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Recreate photo map layers: features=${featureCollection.features()?.size}, " +
+                    "radius=${sourceKey.radiusPx}, minPoints=${sourceKey.minPoints}, " +
+                    "markerScale=${sourceKey.markerScalePercent}"
+            )
             style.recreatePhotoMapLayers(sourceKey, featureCollection, colors)
             configuredSourceKey = sourceKey
         } else {
             Log.d(
+                PhotoMapLayerLogTag,
+                "Update photo map source: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
                 PhotoMapLayerLogTag,
                 "Update photo map source: features=${featureCollection.features()?.size}"
             )
@@ -73,10 +84,18 @@ class PhotoMapLayerController {
                 PhotoMapLayerLogTag,
                 "Visible thumbnail source is missing: features=${featureCollection.features()?.size}"
             )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Visible thumbnail source is missing: features=${featureCollection.features()?.size}"
+            )
             return
         }
 
         Log.d(
+            PhotoMapLayerLogTag,
+            "Update visible thumbnail source: features=${featureCollection.features()?.size}"
+        )
+        AppDiagnostics.record(
             PhotoMapLayerLogTag,
             "Update visible thumbnail source: features=${featureCollection.features()?.size}"
         )
@@ -103,6 +122,7 @@ private fun Style.recreatePhotoMapLayers(
     removeLayer(PHOTO_THUMBNAIL_LAYER_ID)
     removeLayer(PHOTO_UNCLUSTERED_LAYER_ID)
     removeLayer(PHOTO_CLUSTER_COUNT_LAYER_ID)
+    removeLayer(PHOTO_CLUSTER_THUMBNAIL_LAYER_ID)
     removeLayer(PHOTO_CLUSTER_LAYER_ID)
     removeSource(PHOTO_THUMBNAIL_SOURCE_ID)
     removeSource(PHOTO_MAP_SOURCE_ID)
@@ -129,6 +149,16 @@ private fun Style.recreatePhotoMapLayers(
                 circleOpacity(0.92f),
                 circleStrokeColor(colors.photoStroke),
                 circleStrokeWidth(3f)
+            )
+    )
+
+    addLayer(
+        SymbolLayer(PHOTO_CLUSTER_THUMBNAIL_LAYER_ID, PHOTO_MAP_SOURCE_ID)
+            .withProperties(
+                iconImage("{$PHOTO_CLUSTER_THUMBNAIL_KEY_PROPERTY}"),
+                iconSize(1.0f),
+                iconAllowOverlap(true),
+                iconIgnorePlacement(true)
             )
     )
 
@@ -184,6 +214,7 @@ private fun Style.updatePhotoMapLayerColors(colors: PhotoMapLayerColors) {
 
 private fun Style.hasPhotoMapLayers(): Boolean {
     return getLayer(PHOTO_CLUSTER_LAYER_ID) != null &&
+        getLayer(PHOTO_CLUSTER_THUMBNAIL_LAYER_ID) != null &&
         getLayer(PHOTO_CLUSTER_COUNT_LAYER_ID) != null &&
         getLayer(PHOTO_UNCLUSTERED_LAYER_ID) != null &&
         getLayer(PHOTO_THUMBNAIL_LAYER_ID) != null
@@ -201,6 +232,7 @@ private data class PhotoMapSourceKey(
 const val PHOTO_MAP_SOURCE_ID = "photo-map-source"
 const val PHOTO_THUMBNAIL_SOURCE_ID = "photo-thumbnail-source"
 const val PHOTO_CLUSTER_LAYER_ID = "photo-cluster-layer"
+const val PHOTO_CLUSTER_THUMBNAIL_LAYER_ID = "photo-cluster-thumbnail-layer"
 const val PHOTO_CLUSTER_COUNT_LAYER_ID = "photo-cluster-count-layer"
 const val PHOTO_UNCLUSTERED_LAYER_ID = "photo-unclustered-layer"
 const val PHOTO_THUMBNAIL_LAYER_ID = "photo-thumbnail-layer"

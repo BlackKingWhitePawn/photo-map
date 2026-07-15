@@ -18,7 +18,7 @@ import com.example.photomap.ui.settings.PhotoMapSettingsScreen
 fun PhotoMapApp(
     viewModel: PhotoAccessViewModel = viewModel()
 ) {
-    var screenStack by rememberSaveable { mutableStateOf(listOf(AppScreen.Photos.name)) }
+    var screenStack by rememberSaveable { mutableStateOf(listOf(AppScreen.Map.name)) }
     val state by viewModel.uiState.collectAsState()
     val currentScreen = AppScreen.valueOf(screenStack.last())
 
@@ -47,6 +47,7 @@ fun PhotoMapApp(
 
         AppScreen.Map -> PhotoMapScreen(
             photos = state.photos,
+            mapItems = state.visibleMapItems,
             mapStyleUrl = BuildConfig.MAP_STYLE_URL,
             clusterSettings = state.clusterSettings,
             isScanning = state.isLoading,
@@ -58,7 +59,8 @@ fun PhotoMapApp(
             onPause = viewModel::pauseCurrentAction,
             onResume = viewModel::resumeCurrentAction,
             onCancel = viewModel::cancelCurrentAction,
-            onOpenSettings = { navigateTo(AppScreen.Settings) }
+            onOpenSettings = { navigateTo(AppScreen.Settings) },
+            onViewportChanged = viewModel::onMapViewportChanged
         )
 
         AppScreen.Settings -> PhotoMapSettingsScreen(
@@ -77,6 +79,8 @@ fun PhotoMapApp(
             onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize,
             onDecreaseClusterMaxDistance = viewModel::decreaseClusterMaxDistance,
             onIncreaseClusterMaxDistance = viewModel::increaseClusterMaxDistance,
+            onDecreaseClusterDensityCoefficient = viewModel::decreaseClusterDensityCoefficient,
+            onIncreaseClusterDensityCoefficient = viewModel::increaseClusterDensityCoefficient,
             onDecreaseClusterMarkerScale = viewModel::decreaseClusterMarkerScale,
             onIncreaseClusterMarkerScale = viewModel::increaseClusterMarkerScale,
             onDecreaseThumbnailCellSize = viewModel::decreaseThumbnailCellSize,

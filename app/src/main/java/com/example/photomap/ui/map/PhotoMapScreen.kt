@@ -60,6 +60,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.photomap.R
 import com.example.photomap.core.settings.PhotoClusterSettings
+import com.example.photomap.core.util.AppDiagnostics
+import com.example.photomap.data.cluster.PhotoMapBounds
+import com.example.photomap.data.cluster.VisiblePhotoMapItem
 import com.example.photomap.domain.model.DevicePhoto
 import java.util.Date
 import kotlin.math.atan2
@@ -87,6 +90,7 @@ import org.maplibre.geojson.Point
 @Composable
 fun PhotoMapScreen(
     photos: List<DevicePhoto>,
+    mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
     isScanning: Boolean,
@@ -98,7 +102,8 @@ fun PhotoMapScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val normalizedClusterSettings = clusterSettings.normalized()
     val photosWithLocation = remember(photos) {
@@ -135,9 +140,11 @@ fun PhotoMapScreen(
                 Box(modifier = Modifier.fillMaxSize()) {
                     PhotoMapLibreMap(
                         photos = photosWithLocation,
+                        mapItems = mapItems,
                         mapStyleUrl = mapStyleUrl,
                         clusterSettings = normalizedClusterSettings,
-                        centerRequestKey = centerRequestKey
+                        centerRequestKey = centerRequestKey,
+                        onViewportChanged = onViewportChanged
                     )
 
                     if (photosWithLocation.isEmpty() && isScanning) {
@@ -216,9 +223,7 @@ private fun MapTopBar(
                     Icon(
                         painter = painterResource(id = R.drawable.ic_settings_24),
                         contentDescription = null,
-                        modifier = Modifier.padding(end = 8.dp)
                     )
-                    Text(text = "Настройки")
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -278,9 +283,11 @@ private fun MapMessage(
 @Composable
 private fun PhotoMapLibreMap(
     photos: List<DevicePhoto>,
+    mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
-    centerRequestKey: Int
+    centerRequestKey: Int,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -310,6 +317,7 @@ private fun PhotoMapLibreMap(
     val latestPhotosById = rememberUpdatedState(photosById)
     val latestClusterSettings = rememberUpdatedState(clusterSettings)
     val latestMapRenderState = rememberUpdatedState(mapRenderState)
+    val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
     val cameraPositions = remember(photos) {
         photos.mapNotNull { photo ->
             photo.toMapPoint()?.let { point -> LatLng(point.latitude, point.longitude) }
@@ -321,10 +329,12 @@ private fun PhotoMapLibreMap(
             onCreate(Bundle())
             getMapAsync { mapLibreMap ->
                 Log.d(PhotoMapLogTag, "Map is ready")
+                AppDiagnostics.record(PhotoMapLogTag, "Map is ready")
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
                 mapLibreMap.addOnCameraIdleListener {
                     thumbnailRefreshKey += 1
+                    mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.addOnMapClickListener { point ->
                     runCatching {
@@ -337,20 +347,24 @@ private fun PhotoMapLibreMap(
                         )
                     }.onFailure { error ->
                         Log.e(PhotoMapLogTag, "Map click handling failed", error)
+                        AppDiagnostics.record(PhotoMapLogTag, "Map click handling failed", error)
                     }.getOrDefault(false)
                 }
                 mapLibreMap.setStyle(mapStyleUrl) { style ->
                     Log.d(PhotoMapLogTag, "Map style loaded")
+                    AppDiagnostics.record(PhotoMapLogTag, "Map style loaded")
                     runCatching {
                         style.removePoliticalBoundaryLayers()
                     }.onFailure { error ->
                         Log.w(PhotoMapLogTag, "Failed to remove boundary layers", error)
+                        AppDiagnostics.record(PhotoMapLogTag, "Failed to remove boundary layers", error)
                     }
                     layerController.reset()
                     thumbnailImageRegistry.clear()
                     isStyleReady = true
                     styleGeneration += 1
                     thumbnailRefreshKey += 1
+                    mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
             }
         }
@@ -378,6 +392,7 @@ private fun PhotoMapLibreMap(
         isStyleReady,
         styleGeneration,
         thumbnailRefreshKey,
+        mapItems,
         photosById,
         clusterSettings,
         layerColors
@@ -388,7 +403,7 @@ private fun PhotoMapLibreMap(
         }
 
         val renderState = mapLibreMap.buildPhotoMapRenderState(
-            photos = photosById.values,
+            mapItems = mapItems,
             width = mapView.width,
             height = mapView.height,
             settings = clusterSettings
@@ -410,22 +425,39 @@ private fun PhotoMapLibreMap(
             style = style,
             featureCollection = visibleThumbnailFeatureCollection
         )
+        val missingClusterThumbnailRequests = renderState.clusterThumbnailRequests
+            .filter { request -> !thumbnailImageRegistry.contains(request.imageKey) }
+            .take(MaxClusterThumbnailImagesPerPass)
         val missingPhotoIds = renderState.thumbnailPhotoIds
             .filter { photoId -> !thumbnailImageRegistry.contains(photoThumbnailImageKey(photoId)) }
             .take(MaxThumbnailImagesPerPass)
-        Log.d(
-            PhotoMapLogTag,
+        val refreshMessage =
             "Map render refresh: photos=${photosById.size}, clusters=${renderState.clusterCount}, " +
                 "singles=${renderState.singleCount}, thumbnails=${renderState.thumbnailPhotoIds.size}, " +
-                "missing=${missingPhotoIds.size}, cached=${thumbnailImageRegistry.size}, " +
+                "missing=${missingPhotoIds.size}, clusterThumbs=${renderState.clusterThumbnailRequests.size}, " +
+                "missingClusterThumbs=${missingClusterThumbnailRequests.size}, cached=${thumbnailImageRegistry.size}, " +
                 "projected=${renderState.projectedPhotoCount}, baseRadius=${clusterSettings.radiusPx}, " +
                 "effectiveRadius=${renderState.effectiveClusterRadiusPx.roundToInt()}, " +
                 "zoom=${mapLibreMap.cameraPosition.zoom}, maxDistanceKm=${clusterSettings.maxDistanceKm}"
-        )
-        if (missingPhotoIds.isEmpty()) {
+        Log.d(PhotoMapLogTag, refreshMessage)
+        AppDiagnostics.record(PhotoMapLogTag, refreshMessage)
+        if (missingPhotoIds.isEmpty() && missingClusterThumbnailRequests.isEmpty()) {
             return@LaunchedEffect
         }
 
+        val clusterThumbnailImages = withContext(Dispatchers.IO) {
+            missingClusterThumbnailRequests.mapNotNull { request ->
+                val photo = photosById[request.representativePhotoId] ?: return@mapNotNull null
+                val bitmap = context.createClusterMapThumbnailBitmap(
+                    photoId = photo.mediaId,
+                    uriString = photo.uri,
+                    count = request.photoCount,
+                    borderColor = layerColors.photoStroke,
+                    backgroundColor = layerColors.photo
+                ) ?: return@mapNotNull null
+                request.imageKey to bitmap
+            }
+        }
         val thumbnailImages = withContext(Dispatchers.IO) {
             missingPhotoIds.mapNotNull { photoId ->
                 val photo = photosById[photoId] ?: return@mapNotNull null
@@ -439,29 +471,38 @@ private fun PhotoMapLibreMap(
             }
         }
         var addedCount = 0
-        thumbnailImages.forEach { (key, bitmap) ->
+        (clusterThumbnailImages + thumbnailImages).forEach { (key, bitmap) ->
             val added = runCatching {
                 style.addImage(key, bitmap)
                 thumbnailImageRegistry.markAdded(style, key)
             }.onFailure { error ->
                 Log.w(PhotoMapLogTag, "Failed to add thumbnail image to style: key=$key", error)
+                AppDiagnostics.record(PhotoMapLogTag, "Failed to add thumbnail image to style: key=$key", error)
             }
             if (added.isSuccess) {
                 addedCount += 1
             }
         }
-        Log.d(
-            PhotoMapLogTag,
-            "Thumbnail images registered: added=$addedCount, decoded=${thumbnailImages.size}, cached=${thumbnailImageRegistry.size}"
-        )
+        val registeredMessage =
+            "Thumbnail images registered: added=$addedCount, decoded=${thumbnailImages.size}, " +
+                "clusterDecoded=${clusterThumbnailImages.size}, cached=${thumbnailImageRegistry.size}"
+        Log.d(PhotoMapLogTag, registeredMessage)
+        AppDiagnostics.record(PhotoMapLogTag, registeredMessage)
         if (addedCount > 0) {
             runCatching {
+                layerController.update(
+                    style = style,
+                    featureCollection = renderState.clusterFeatureCollection,
+                    settings = clusterSettings,
+                    colors = layerColors
+                )
                 layerController.updateVisibleThumbnails(
                     style = style,
                     featureCollection = visibleThumbnailFeatureCollection
                 )
             }.onFailure { error ->
                 Log.w(PhotoMapLogTag, "Failed to refresh thumbnails after image registration", error)
+                AppDiagnostics.record(PhotoMapLogTag, "Failed to refresh thumbnails after image registration", error)
             }
         }
     }
@@ -687,6 +728,26 @@ private fun MapLibreMap.handlePhotoMapClick(
         "Photo projection hit-test: photoIds=${photoIds.distinct().size}, " +
             "renderHit=${renderItem?.id}, isCluster=${renderItem?.isCluster}"
     )
+    AppDiagnostics.record(
+        PhotoMapLogTag,
+        "Photo projection hit-test: photoIds=${photoIds.distinct().size}, " +
+            "renderHit=${renderItem?.id}, isCluster=${renderItem?.isCluster}"
+    )
+
+    if (renderItem?.isCluster == true) {
+        val nextZoom = (cameraPosition.zoom + ClusterTapZoomStep).coerceAtMost(ClusterTapMaxZoom)
+        animateCamera(
+            CameraUpdateFactory.newLatLngZoom(
+                LatLng(renderItem.latitude, renderItem.longitude),
+                nextZoom
+            )
+        )
+        AppDiagnostics.record(
+            PhotoMapLogTag,
+            "Zoom to custom cluster: id=${renderItem.id}, photos=${renderItem.photoCount}, zoom=$nextZoom"
+        )
+        return true
+    }
 
     return when (val action = PhotoMapClickDecision.forUnclustered(photoIds)) {
         PhotoMapTapAction.NoAction,
@@ -794,12 +855,12 @@ private fun bottomGalleryStateForPhotoIds(
 }
 
 private fun MapLibreMap.buildPhotoMapRenderState(
-    photos: Collection<DevicePhoto>,
+    mapItems: List<VisiblePhotoMapItem>,
     width: Int,
     height: Int,
     settings: PhotoClusterSettings
 ): PhotoMapRenderState {
-    if (width <= 0 || height <= 0 || photos.isEmpty()) {
+    if (width <= 0 || height <= 0 || mapItems.isEmpty()) {
         return PhotoMapRenderState.Empty
     }
 
@@ -811,21 +872,26 @@ private fun MapLibreMap.buildPhotoMapRenderState(
         val minY = -padding
         val maxX = width + padding
         val maxY = height + padding
-        val projectedPhotos = photos.asSequence()
-            .mapNotNull { photo ->
-                val point = photo.toMapPoint() ?: return@mapNotNull null
-                val screenPoint = projection.toScreenLocation(LatLng(point.latitude, point.longitude))
+        val projectedItems = mapItems.asSequence()
+            .mapNotNull { item ->
+                val screenPoint = projection.toScreenLocation(LatLng(item.latitude, item.longitude))
                 if (screenPoint.x !in minX..maxX || screenPoint.y !in minY..maxY) {
                     return@mapNotNull null
                 }
 
                 val dx = screenPoint.x - centerX
                 val dy = screenPoint.y - centerY
-                ProjectedMapPhoto(
-                    photo = photo,
-                    point = point,
+                PhotoMapRenderItem(
+                    id = item.id,
+                    level = item.level,
+                    latitude = item.latitude,
+                    longitude = item.longitude,
+                    photoCount = item.photoCount,
+                    priorityScore = item.priorityScore,
+                    coverPhotoId = item.coverPhotoId,
                     screenX = screenPoint.x,
                     screenY = screenPoint.y,
+                    photoIds = item.photoIds,
                     distanceFromCenter = dx * dx + dy * dy
                 )
             }
@@ -837,27 +903,32 @@ private fun MapLibreMap.buildPhotoMapRenderState(
             zoom = cameraPosition.zoom,
             settings = settings
         )
-        val items = clusterProjectedPhotos(
-            projectedPhotos = projectedPhotos,
-            radiusPx = effectiveClusterRadiusPx,
-            minPoints = settings.minPoints,
-            maxDistanceKm = settings.maxDistanceKm.toDouble()
-        )
-        val clusterFeatures = items
+        val clusterFeatures = projectedItems
             .filter { item -> item.isCluster }
             .map { item -> item.toClusterFeature() }
+        val clusterThumbnailRequests = projectedItems
+            .filter { item -> item.isCluster }
+            .mapNotNull { item ->
+                val representativePhotoId = item.coverPhotoId ?: item.photoIds.firstOrNull() ?: return@mapNotNull null
+                ClusterThumbnailRequest(
+                    imageKey = photoClusterThumbnailImageKey(item.id),
+                    representativePhotoId = representativePhotoId,
+                    photoCount = item.photoCount
+                )
+            }
         val thumbnailPhotoIds = visibleThumbnailPhotoIds(
-            items = items,
+            items = projectedItems,
             width = width,
             height = height,
             settings = settings
         )
 
         PhotoMapRenderState(
-            items = items,
+            items = projectedItems,
             thumbnailPhotoIds = thumbnailPhotoIds,
+            clusterThumbnailRequests = clusterThumbnailRequests,
             clusterFeatureCollection = FeatureCollection.fromFeatures(clusterFeatures),
-            projectedPhotoCount = projectedPhotos.size,
+            projectedPhotoCount = projectedItems.size,
             effectiveClusterRadiusPx = effectiveClusterRadiusPx
         )
     }.onFailure { error ->
@@ -1060,6 +1131,124 @@ private fun Context.createFixedMapThumbnailBitmapOrThrow(
     return result
 }
 
+private fun Context.createClusterMapThumbnailBitmap(
+    photoId: Long,
+    uriString: String,
+    count: Int,
+    borderColor: Int,
+    backgroundColor: Int
+): Bitmap? {
+    return runCatching {
+        createClusterMapThumbnailBitmapOrThrow(
+            photoId = photoId,
+            uriString = uriString,
+            count = count,
+            borderColor = borderColor,
+            backgroundColor = backgroundColor
+        )
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to create cluster thumbnail bitmap: photoId=$photoId count=$count", error)
+        AppDiagnostics.record(PhotoMapLogTag, "Failed to create cluster thumbnail bitmap: photoId=$photoId count=$count", error)
+    }.getOrNull()
+}
+
+private fun Context.createClusterMapThumbnailBitmapOrThrow(
+    photoId: Long,
+    uriString: String,
+    count: Int,
+    borderColor: Int,
+    backgroundColor: Int
+): Bitmap {
+    val width = mapThumbnailWidthPx()
+    val height = mapThumbnailHeightPx()
+    val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+    val outerRect = RectF(0f, 0f, width.toFloat(), height.toFloat())
+    val imageInset = MapThumbnailBorderPx
+    val imageRect = RectF(
+        imageInset,
+        imageInset,
+        width - imageInset,
+        height - imageInset
+    )
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = backgroundColor
+        style = Paint.Style.FILL
+    }
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = borderColor
+        style = Paint.Style.STROKE
+        strokeWidth = MapThumbnailBorderPx
+    }
+    val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x88000000.toInt()
+        style = Paint.Style.FILL
+    }
+    val image = loadPhotoPreviewBitmap(
+        uriString = uriString,
+        targetSizePx = max(width, height),
+        photoId = photoId
+    )?.toSoftwareBitmapForCanvas(photoId)
+
+    canvas.drawRoundRect(outerRect, MapThumbnailCornerRadiusPx, MapThumbnailCornerRadiusPx, backgroundPaint)
+    val path = Path().apply {
+        addRoundRect(imageRect, MapThumbnailInnerCornerRadiusPx, MapThumbnailInnerCornerRadiusPx, Path.Direction.CW)
+    }
+    val saveCount = canvas.save()
+    canvas.clipPath(path)
+    if (image != null) {
+        val tiny = Bitmap.createBitmap(
+            ClusterThumbnailBlurSamplePx,
+            ClusterThumbnailBlurSamplePx,
+            Bitmap.Config.ARGB_8888
+        )
+        val tinyRect = RectF(
+            0f,
+            0f,
+            ClusterThumbnailBlurSamplePx.toFloat(),
+            ClusterThumbnailBlurSamplePx.toFloat()
+        )
+        val tinyCanvas = Canvas(tiny)
+        tinyCanvas.drawBitmap(
+            image,
+            image.centerCropSourceRect(tinyRect),
+            tinyRect,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                isFilterBitmap = true
+                isDither = true
+            }
+        )
+        canvas.drawBitmap(
+            tiny,
+            Rect(0, 0, ClusterThumbnailBlurSamplePx, ClusterThumbnailBlurSamplePx),
+            imageRect,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                isFilterBitmap = true
+                isDither = true
+            }
+        )
+        tiny.recycle()
+    } else {
+        Log.w(PhotoMapLogTag, "Cluster thumbnail uses placeholder because bitmap is null: photoId=$photoId")
+        AppDiagnostics.record(PhotoMapLogTag, "Cluster thumbnail uses placeholder because bitmap is null: photoId=$photoId")
+    }
+    canvas.drawRoundRect(imageRect, MapThumbnailInnerCornerRadiusPx, MapThumbnailInnerCornerRadiusPx, overlayPaint)
+    canvas.restoreToCount(saveCount)
+    canvas.drawRoundRect(
+        RectF(
+            MapThumbnailBorderPx / 2f,
+            MapThumbnailBorderPx / 2f,
+            width - MapThumbnailBorderPx / 2f,
+            height - MapThumbnailBorderPx / 2f
+        ),
+        MapThumbnailCornerRadiusPx,
+        MapThumbnailCornerRadiusPx,
+        borderPaint
+    )
+
+    return result
+}
+
 private data class VisiblePhotoCandidate(
     val photoId: Long,
     val distanceFromCenter: Float
@@ -1068,6 +1257,7 @@ private data class VisiblePhotoCandidate(
 private data class PhotoMapRenderState(
     val items: List<PhotoMapRenderItem>,
     val thumbnailPhotoIds: List<Long>,
+    val clusterThumbnailRequests: List<ClusterThumbnailRequest>,
     val clusterFeatureCollection: FeatureCollection,
     val projectedPhotoCount: Int,
     val effectiveClusterRadiusPx: Float
@@ -1108,6 +1298,7 @@ private data class PhotoMapRenderState(
         val Empty = PhotoMapRenderState(
             items = emptyList(),
             thumbnailPhotoIds = emptyList(),
+            clusterThumbnailRequests = emptyList(),
             clusterFeatureCollection = emptyPhotoFeatureCollection(),
             projectedPhotoCount = 0,
             effectiveClusterRadiusPx = 0f
@@ -1115,22 +1306,34 @@ private data class PhotoMapRenderState(
     }
 }
 
+private data class ClusterThumbnailRequest(
+    val imageKey: String,
+    val representativePhotoId: Long,
+    val photoCount: Int
+)
+
 private data class PhotoMapRenderItem(
     val id: String,
+    val level: Int,
     val latitude: Double,
     val longitude: Double,
+    val photoCount: Int,
+    val priorityScore: Double,
+    val coverPhotoId: Long?,
     val screenX: Float,
     val screenY: Float,
-    val photoIds: List<Long>
+    val photoIds: List<Long>,
+    val distanceFromCenter: Float = 0f
 ) {
     val isCluster: Boolean
-        get() = photoIds.size > 1
+        get() = level > 0 || photoCount > 1
 
     fun toClusterFeature(): Feature {
         return Feature.fromGeometry(Point.fromLngLat(longitude, latitude)).apply {
             addStringProperty(PHOTO_CLUSTER_ID_PROPERTY, id)
-            addNumberProperty(PHOTO_CLUSTER_COUNT_PROPERTY, photoIds.size)
-            addStringProperty(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY, photoIds.size.abbreviatedCount())
+            addNumberProperty(PHOTO_CLUSTER_COUNT_PROPERTY, photoCount)
+            addStringProperty(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY, photoCount.clusterCountLabel())
+            addStringProperty(PHOTO_CLUSTER_THUMBNAIL_KEY_PROPERTY, photoClusterThumbnailImageKey(id))
         }
     }
 }
@@ -1214,8 +1417,12 @@ private class MutableMapPhotoCluster(
         val photoIds = photos.map { photo -> photo.photo.mediaId }
         return PhotoMapRenderItem(
             id = "cluster-${index}-${photoIds.firstOrNull() ?: 0L}",
+            level = 9,
             latitude = latitude,
             longitude = longitude,
+            photoCount = photoIds.size,
+            priorityScore = photoIds.size.toDouble(),
+            coverPhotoId = photoIds.firstOrNull(),
             screenX = screenX,
             screenY = screenY,
             photoIds = photoIds
@@ -1226,8 +1433,12 @@ private class MutableMapPhotoCluster(
         return photos.map { photo ->
             PhotoMapRenderItem(
                 id = "photo-${photo.photo.mediaId}",
+                level = 0,
                 latitude = photo.point.latitude,
                 longitude = photo.point.longitude,
+                photoCount = 1,
+                priorityScore = 1.0,
+                coverPhotoId = photo.photo.mediaId,
                 screenX = photo.screenX,
                 screenY = photo.screenY,
                 photoIds = listOf(photo.photo.mediaId)
@@ -1264,11 +1475,11 @@ private fun haversineDistanceKm(
     return EarthRadiusKm * angularDistance
 }
 
-private fun Int.abbreviatedCount(): String {
+private fun Int.clusterCountLabel(): String {
     return when {
-        this < 1000 -> toString()
-        this < 1_000_000 -> "${this / 1000}k"
-        else -> "${this / 1_000_000}m"
+        this < 1000 -> "+$this"
+        this < 1_000_000 -> "+${this / 1000}k"
+        else -> "+${this / 1_000_000}m"
     }
 }
 
@@ -1354,6 +1565,26 @@ private fun MapLibreMap.fitPositions(
     }
 }
 
+private fun MapLibreMap.dispatchViewportChanged(
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
+) {
+    runCatching {
+        val bounds = projection.visibleRegion.latLngBounds
+        onViewportChanged(
+            PhotoMapBounds(
+                south = bounds.latSouth,
+                west = bounds.lonWest,
+                north = bounds.latNorth,
+                east = bounds.lonEast
+            ),
+            cameraPosition.zoom
+        )
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to dispatch map viewport", error)
+        AppDiagnostics.record(PhotoMapLogTag, "Failed to dispatch map viewport", error)
+    }
+}
+
 private fun MapLibreMap.configureGestures() {
     uiSettings.setAllGesturesEnabled(true)
     uiSettings.setScrollGesturesEnabled(true)
@@ -1421,7 +1652,11 @@ private const val MapThumbnailBorderPx = 4f
 private const val MapThumbnailCornerRadiusPx = 14f
 private const val MapThumbnailInnerCornerRadiusPx = 10f
 private const val MaxCachedMapThumbnailImages = 360
-private const val MaxThumbnailImagesPerPass = 80
+private const val MaxThumbnailImagesPerPass = 32
+private const val MaxClusterThumbnailImagesPerPass = 24
+private const val ClusterTapZoomStep = 2.0
+private const val ClusterTapMaxZoom = 20.0
+private const val ClusterThumbnailBlurSamplePx = 16
 private const val CityWideClusterZoom = 11.0
 private const val DistrictClusterZoom = 12.5
 private const val NeighborhoodClusterZoom = 14.0

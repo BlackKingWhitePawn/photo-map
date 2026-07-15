@@ -5,6 +5,7 @@ data class PhotoClusterSettings(
     val minPoints: Int = PHOTO_CLUSTER_MIN_POINTS,
     val leavesPageSize: Int = PHOTO_CLUSTER_LEAVES_PAGE_SIZE,
     val maxDistanceKm: Int = PHOTO_CLUSTER_MAX_DISTANCE_KM,
+    val densityCoefficientPercent: Int = PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT,
     val markerScalePercent: Int = PHOTO_CLUSTER_MARKER_SCALE_PERCENT,
     val thumbnailCellSizePx: Int = PHOTO_THUMBNAIL_CELL_SIZE_PX,
     val maxVisibleThumbnails: Int = PHOTO_MAX_VISIBLE_THUMBNAILS,
@@ -21,6 +22,10 @@ data class PhotoClusterSettings(
             maxDistanceKm = maxDistanceKm.coerceIn(
                 MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM,
                 MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
+            ),
+            densityCoefficientPercent = densityCoefficientPercent.coerceIn(
+                MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT,
+                MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
             ),
             markerScalePercent = markerScalePercent.coerceIn(
                 MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT,
@@ -46,6 +51,7 @@ const val PHOTO_CLUSTER_RADIUS = 110
 const val PHOTO_CLUSTER_MIN_POINTS = 2
 const val PHOTO_CLUSTER_LEAVES_PAGE_SIZE = 100
 const val PHOTO_CLUSTER_MAX_DISTANCE_KM = 50
+const val PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT = 170
 const val PHOTO_CLUSTER_MARKER_SCALE_PERCENT = 125
 const val PHOTO_THUMBNAIL_CELL_SIZE_PX = 132
 const val PHOTO_MAX_VISIBLE_THUMBNAILS = 90
@@ -65,6 +71,10 @@ const val PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP = 25
 const val MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM = 5
 const val MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM = 50
 const val PHOTO_CLUSTER_MAX_DISTANCE_KM_STEP = 5
+
+const val MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT = 80
+const val MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT = 320
+const val PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP = 10
 
 const val MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT = 80
 const val MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT = 200

@@ -3,6 +3,7 @@ package com.example.photomap.ui.settings
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -24,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.photomap.BuildConfig
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
@@ -32,6 +34,7 @@ import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
 import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX
 import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM
@@ -40,6 +43,7 @@ import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+import com.example.photomap.core.util.AppDiagnostics
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 
 @Composable
@@ -59,6 +63,8 @@ fun PhotoMapSettingsScreen(
     onIncreaseClusterLeavesPageSize: () -> Unit,
     onDecreaseClusterMaxDistance: () -> Unit,
     onIncreaseClusterMaxDistance: () -> Unit,
+    onDecreaseClusterDensityCoefficient: () -> Unit,
+    onIncreaseClusterDensityCoefficient: () -> Unit,
     onDecreaseClusterMarkerScale: () -> Unit,
     onIncreaseClusterMarkerScale: () -> Unit,
     onDecreaseThumbnailCellSize: () -> Unit,
@@ -119,6 +125,13 @@ fun PhotoMapSettingsScreen(
                     range = "$MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM-$MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM км",
                     onDecrease = onDecreaseClusterMaxDistance,
                     onIncrease = onIncreaseClusterMaxDistance
+                )
+                SettingsStepper(
+                    title = "Коэффициент плотности",
+                    value = "${clusterSettings.densityCoefficientPercent}%",
+                    range = "$MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT-$MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT%",
+                    onDecrease = onDecreaseClusterDensityCoefficient,
+                    onIncrease = onIncreaseClusterDensityCoefficient
                 )
                 SettingsStepper(
                     title = "Размер кластеров",
@@ -218,6 +231,12 @@ fun PhotoMapSettingsScreen(
                     text = "Photo Map ${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.bodyMedium
                 )
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { context.shareDiagnostics(state) }
+                ) {
+                    Text(text = "Экспорт логов")
+                }
             }
         }
     }
@@ -278,5 +297,46 @@ private fun scanStatusText(state: PhotoAccessUiState): String {
         "$prefix: ${state.scanProcessed} из ${state.scanTotal}"
     } else {
         prefix
+    }
+}
+
+private fun android.content.Context.shareDiagnostics(state: PhotoAccessUiState) {
+    runCatching {
+        val uri = AppDiagnostics.createReport(
+            context = this,
+            header = state.diagnosticHeader()
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Photo Map diagnostics")
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(intent, "Экспорт логов"))
+    }.onFailure {
+        Toast.makeText(this, "Не удалось экспортировать логи", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun PhotoAccessUiState.diagnosticHeader(): String {
+    val settings = clusterSettings
+    return buildString {
+        appendLine("Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        appendLine("Permission: $permissionStatus")
+        appendLine("Photos in memory: ${photos.size}")
+        appendLine("Indexed photos: $indexedPhotoCount")
+        appendLine("Indexed with location: $photosWithLocationCount")
+        appendLine("Indexed location scanned: $indexedLocationScannedCount")
+        appendLine("Scanning: $isLoading")
+        appendLine("Scan paused: $isScanPaused")
+        appendLine("Scan progress: $scanProcessed/$scanTotal")
+        appendLine("Cluster radius px: ${settings.radiusPx}")
+        appendLine("Cluster min points: ${settings.minPoints}")
+        appendLine("Cluster max distance km: ${settings.maxDistanceKm}")
+        appendLine("Cluster density coefficient percent: ${settings.densityCoefficientPercent}")
+        appendLine("Cluster marker scale percent: ${settings.markerScalePercent}")
+        appendLine("Thumbnail cell size px: ${settings.thumbnailCellSizePx}")
+        appendLine("Max visible thumbnails: ${settings.maxVisibleThumbnails}")
+        appendLine("Thumbnail preload padding px: ${settings.thumbnailPreloadPaddingPx}")
     }
 }

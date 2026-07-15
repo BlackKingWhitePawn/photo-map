@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.photomap.core.permissions.PhotoPermissionManager
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
@@ -13,6 +14,7 @@ import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
 import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX
 import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM
@@ -21,6 +23,8 @@ import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+import com.example.photomap.core.settings.PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
+import com.example.photomap.core.settings.PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
 import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP
 import com.example.photomap.core.settings.PHOTO_CLUSTER_MARKER_SCALE_PERCENT
@@ -37,6 +41,9 @@ import com.example.photomap.core.settings.PHOTO_THUMBNAIL_CELL_SIZE_PX_STEP
 import com.example.photomap.core.settings.PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.settings.PHOTO_THUMBNAIL_PRELOAD_PADDING_PX_STEP
 import com.example.photomap.core.settings.PhotoClusterSettings
+import com.example.photomap.data.cluster.PhotoClusterStore
+import com.example.photomap.data.cluster.PhotoMapBounds
+import com.example.photomap.data.cluster.clusterLevelForZoom
 import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
 import com.example.photomap.data.media.PhotoReadControl
@@ -51,9 +58,14 @@ import kotlinx.coroutines.launch
 
 class PhotoAccessViewModel(application: Application) : AndroidViewModel(application) {
     private val photoReader: DevicePhotoReader = AndroidMediaStorePhotoReader(application)
+    private val clusterStore = PhotoClusterStore(application)
     private val settings = application.getSharedPreferences(SettingsName, Context.MODE_PRIVATE)
     private val scanPauseState = MutableStateFlow(false)
     private var scanJob: Job? = null
+    private var loadedClusterBounds: PhotoMapBounds? = null
+    private var loadedClusterLevel: Int? = null
+    private var lastViewportBounds: PhotoMapBounds? = null
+    private var lastViewportZoom: Double? = null
 
     private val _uiState = MutableStateFlow(
         PhotoAccessUiState(
@@ -163,6 +175,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                         loadingMessage = null
                     )
                 }
+                rebuildClusters(photos)
             } catch (cancellationException: CancellationException) {
                 _uiState.update { state ->
                     state.copy(
@@ -270,6 +283,18 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun increaseClusterDensityCoefficient() {
+        updateClusterSettings {
+            copy(densityCoefficientPercent = densityCoefficientPercent + PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP)
+        }
+    }
+
+    fun decreaseClusterDensityCoefficient() {
+        updateClusterSettings {
+            copy(densityCoefficientPercent = densityCoefficientPercent - PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP)
+        }
+    }
+
     fun increaseClusterMarkerScale() {
         updateClusterSettings {
             copy(markerScalePercent = markerScalePercent + PHOTO_CLUSTER_MARKER_SCALE_PERCENT_STEP)
@@ -318,6 +343,32 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun onMapViewportChanged(bounds: PhotoMapBounds, zoom: Double) {
+        lastViewportBounds = bounds
+        lastViewportZoom = zoom
+        val requestedLevel = clusterLevelForZoom(zoom)
+        val currentLoadedBounds = loadedClusterBounds
+        if (loadedClusterLevel == requestedLevel && currentLoadedBounds?.contains(bounds) == true) {
+            return
+        }
+
+        viewModelScope.launch {
+            val content = clusterStore.loadVisibleMapContent(
+                bounds = bounds,
+                zoom = zoom,
+                settings = uiState.value.clusterSettings
+            )
+            loadedClusterBounds = content.loadedBounds
+            loadedClusterLevel = content.level
+            _uiState.update { state ->
+                state.copy(
+                    visibleMapItems = content.items,
+                    visibleMapLevel = content.level
+                )
+            }
+        }
+    }
+
     private fun refreshIndexedPhotos() {
         viewModelScope.launch {
             val photos = photoReader.readIndexedPhotos()
@@ -330,6 +381,10 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                     indexedPhotoCount = stats.totalCount
                 )
             }
+            clusterStore.rebuildClustersIfOutdated(
+                photos = photos,
+                settings = uiState.value.clusterSettings
+            )
         }
     }
 
@@ -347,12 +402,48 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    private fun rebuildClusters(photos: List<DevicePhoto> = uiState.value.photos) {
+        loadedClusterBounds = null
+        loadedClusterLevel = null
+        viewModelScope.launch {
+            clusterStore.rebuildClusters(
+                photos = photos,
+                settings = uiState.value.clusterSettings
+            )
+            val bounds = lastViewportBounds
+            val zoom = lastViewportZoom
+            if (bounds != null && zoom != null) {
+                val content = clusterStore.loadVisibleMapContent(
+                    bounds = bounds,
+                    zoom = zoom,
+                    settings = uiState.value.clusterSettings
+                )
+                loadedClusterBounds = content.loadedBounds
+                loadedClusterLevel = content.level
+                _uiState.update { state ->
+                    state.copy(
+                        visibleMapItems = content.items,
+                        visibleMapLevel = content.level
+                    )
+                }
+            } else {
+                _uiState.update { state ->
+                    state.copy(
+                        visibleMapItems = emptyList(),
+                        visibleMapLevel = 0
+                    )
+                }
+            }
+        }
+    }
+
     private companion object {
         const val SettingsName = "photo_map_settings"
         const val ClusterRadiusKey = "cluster_radius_px"
         const val ClusterMinPointsKey = "cluster_min_points"
         const val ClusterLeavesPageSizeKey = "cluster_leaves_page_size"
         const val ClusterMaxDistanceKmKey = "cluster_max_distance_km"
+        const val ClusterDensityCoefficientPercentKey = "cluster_density_coefficient_percent"
         const val ClusterMarkerScalePercentKey = "cluster_marker_scale_percent"
         const val ThumbnailCellSizePxKey = "thumbnail_cell_size_px"
         const val MaxVisibleThumbnailsKey = "max_visible_thumbnails"
@@ -365,6 +456,10 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
             minPoints = settings.getInt(ClusterMinPointsKey, PHOTO_CLUSTER_MIN_POINTS),
             leavesPageSize = settings.getInt(ClusterLeavesPageSizeKey, PHOTO_CLUSTER_LEAVES_PAGE_SIZE),
             maxDistanceKm = settings.getInt(ClusterMaxDistanceKmKey, PHOTO_CLUSTER_MAX_DISTANCE_KM),
+            densityCoefficientPercent = settings.getInt(
+                ClusterDensityCoefficientPercentKey,
+                PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
+            ),
             markerScalePercent = settings.getInt(
                 ClusterMarkerScalePercentKey,
                 PHOTO_CLUSTER_MARKER_SCALE_PERCENT
@@ -401,6 +496,13 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 )
             )
             .putInt(
+                ClusterDensityCoefficientPercentKey,
+                nextSettings.densityCoefficientPercent.coerceIn(
+                    MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT,
+                    MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
+                )
+            )
+            .putInt(
                 ClusterMarkerScalePercentKey,
                 nextSettings.markerScalePercent.coerceIn(
                     MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT,
@@ -432,6 +534,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { state ->
             state.copy(clusterSettings = nextSettings)
         }
+        rebuildClusters()
     }
 }
 

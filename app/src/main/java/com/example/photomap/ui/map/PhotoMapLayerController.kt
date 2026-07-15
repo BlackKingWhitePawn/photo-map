@@ -6,7 +6,6 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression.color
 import org.maplibre.android.style.expressions.Expression.get
 import org.maplibre.android.style.expressions.Expression.has
-import org.maplibre.android.style.expressions.Expression.not
 import org.maplibre.android.style.expressions.Expression.step
 import org.maplibre.android.style.expressions.Expression.stop
 import org.maplibre.android.style.expressions.Expression.toString as expressionToString
@@ -28,7 +27,6 @@ import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
 import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
 import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.layers.SymbolLayer
-import org.maplibre.android.style.sources.GeoJsonOptions
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -40,18 +38,12 @@ class PhotoMapLayerController {
         style: Style,
         featureCollection: FeatureCollection,
         settings: PhotoClusterSettings,
-        colors: PhotoMapLayerColors,
-        mapMaxZoom: Double
+        colors: PhotoMapLayerColors
     ) {
-        val clusterMaxZoom = mapMaxZoom.toInt()
-            .coerceAtLeast(PhotoMapDefaultClusterMaxZoom)
-            .coerceAtMost(PhotoMapMaxSourceMaxZoom - 1)
-        val sourceMaxZoom = (clusterMaxZoom + 1).coerceAtMost(PhotoMapMaxSourceMaxZoom)
         val sourceKey = PhotoMapSourceKey(
             radiusPx = settings.radiusPx,
             minPoints = settings.minPoints,
-            clusterMaxZoom = clusterMaxZoom,
-            sourceMaxZoom = sourceMaxZoom
+            markerScalePercent = settings.markerScalePercent
         )
         val source = style.getSourceAs<GeoJsonSource>(PHOTO_MAP_SOURCE_ID)
         if (source == null || configuredSourceKey != sourceKey || !style.hasPhotoMapLayers()) {
@@ -59,7 +51,7 @@ class PhotoMapLayerController {
                 PhotoMapLayerLogTag,
                 "Recreate photo map layers: features=${featureCollection.features()?.size}, " +
                     "radius=${sourceKey.radiusPx}, minPoints=${sourceKey.minPoints}, " +
-                    "clusterMaxZoom=${sourceKey.clusterMaxZoom}, sourceMaxZoom=${sourceKey.sourceMaxZoom}"
+                    "markerScale=${sourceKey.markerScalePercent}"
             )
             style.recreatePhotoMapLayers(sourceKey, featureCollection, colors)
             configuredSourceKey = sourceKey
@@ -124,13 +116,7 @@ private fun Style.recreatePhotoMapLayers(
     addSource(
         GeoJsonSource(
             PHOTO_MAP_SOURCE_ID,
-            featureCollection,
-            GeoJsonOptions()
-                .withCluster(true)
-                .withMaxZoom(sourceKey.sourceMaxZoom)
-                .withClusterRadius(sourceKey.radiusPx)
-                .withClusterMinPoints(sourceKey.minPoints)
-                .withClusterMaxZoom(sourceKey.clusterMaxZoom)
+            featureCollection
         )
     )
 
@@ -143,20 +129,20 @@ private fun Style.recreatePhotoMapLayers(
 
     addLayer(
         CircleLayer(PHOTO_CLUSTER_LAYER_ID, PHOTO_MAP_SOURCE_ID)
-            .withFilter(has(POINT_COUNT_PROPERTY))
+            .withFilter(has(PHOTO_CLUSTER_COUNT_PROPERTY))
             .withProperties(
                 circleRadius(
                     step(
-                        get(POINT_COUNT_PROPERTY),
-                        22f,
-                        stop(10, 28f),
-                        stop(50, 34f),
-                        stop(200, 42f)
+                        get(PHOTO_CLUSTER_COUNT_PROPERTY),
+                        24f * sourceKey.markerScale,
+                        stop(10, 32f * sourceKey.markerScale),
+                        stop(50, 42f * sourceKey.markerScale),
+                        stop(200, 54f * sourceKey.markerScale)
                     )
                 ),
                 circleColor(
                     step(
-                        get(POINT_COUNT_PROPERTY),
+                        get(PHOTO_CLUSTER_COUNT_PROPERTY),
                         color(colors.clusterSmall),
                         stop(10, color(colors.clusterMedium)),
                         stop(50, color(colors.clusterLarge)),
@@ -171,10 +157,10 @@ private fun Style.recreatePhotoMapLayers(
 
     addLayer(
         SymbolLayer(PHOTO_CLUSTER_COUNT_LAYER_ID, PHOTO_MAP_SOURCE_ID)
-            .withFilter(has(POINT_COUNT_PROPERTY))
+            .withFilter(has(PHOTO_CLUSTER_COUNT_PROPERTY))
             .withProperties(
-                textField(expressionToString(get(POINT_COUNT_ABBREVIATED_PROPERTY))),
-                textSize(13f),
+                textField(expressionToString(get(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY))),
+                textSize(14f * sourceKey.markerScale.coerceAtMost(1.4f)),
                 textColor(colors.clusterText),
                 textHaloColor(colors.clusterTextHalo),
                 textHaloWidth(1.2f),
@@ -209,7 +195,7 @@ private fun Style.updatePhotoMapLayerColors(colors: PhotoMapLayerColors) {
     getLayerAs<CircleLayer>(PHOTO_CLUSTER_LAYER_ID)?.setProperties(
         circleColor(
             step(
-                get(POINT_COUNT_PROPERTY),
+                get(PHOTO_CLUSTER_COUNT_PROPERTY),
                 color(colors.clusterSmall),
                 stop(10, color(colors.clusterMedium)),
                 stop(50, color(colors.clusterLarge)),
@@ -238,9 +224,11 @@ private fun Style.hasPhotoMapLayers(): Boolean {
 private data class PhotoMapSourceKey(
     val radiusPx: Int,
     val minPoints: Int,
-    val clusterMaxZoom: Int,
-    val sourceMaxZoom: Int
-)
+    val markerScalePercent: Int
+) {
+    val markerScale: Float
+        get() = markerScalePercent.coerceIn(80, 200) / 100f
+}
 
 const val PHOTO_MAP_SOURCE_ID = "photo-map-source"
 const val PHOTO_THUMBNAIL_SOURCE_ID = "photo-thumbnail-source"
@@ -249,8 +237,4 @@ const val PHOTO_CLUSTER_COUNT_LAYER_ID = "photo-cluster-count-layer"
 const val PHOTO_UNCLUSTERED_LAYER_ID = "photo-unclustered-layer"
 const val PHOTO_THUMBNAIL_LAYER_ID = "photo-thumbnail-layer"
 
-private const val POINT_COUNT_PROPERTY = "point_count"
-private const val POINT_COUNT_ABBREVIATED_PROPERTY = "point_count_abbreviated"
-private const val PhotoMapDefaultClusterMaxZoom = 22
-private const val PhotoMapMaxSourceMaxZoom = 25
 private const val PhotoMapLayerLogTag = "PhotoMapMap"

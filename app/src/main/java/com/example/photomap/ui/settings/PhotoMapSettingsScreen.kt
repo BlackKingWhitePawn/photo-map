@@ -25,11 +25,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.photomap.BuildConfig
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
+import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX
+import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
+import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX
+import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 
 @Composable
@@ -46,7 +56,17 @@ fun PhotoMapSettingsScreen(
     onDecreaseClusterMinPoints: () -> Unit,
     onIncreaseClusterMinPoints: () -> Unit,
     onDecreaseClusterLeavesPageSize: () -> Unit,
-    onIncreaseClusterLeavesPageSize: () -> Unit
+    onIncreaseClusterLeavesPageSize: () -> Unit,
+    onDecreaseClusterMaxDistance: () -> Unit,
+    onIncreaseClusterMaxDistance: () -> Unit,
+    onDecreaseClusterMarkerScale: () -> Unit,
+    onIncreaseClusterMarkerScale: () -> Unit,
+    onDecreaseThumbnailCellSize: () -> Unit,
+    onIncreaseThumbnailCellSize: () -> Unit,
+    onDecreaseMaxVisibleThumbnails: () -> Unit,
+    onIncreaseMaxVisibleThumbnails: () -> Unit,
+    onDecreaseThumbnailPreloadPadding: () -> Unit,
+    onIncreaseThumbnailPreloadPadding: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -92,6 +112,41 @@ fun PhotoMapSettingsScreen(
                     range = "$MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE-$MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE",
                     onDecrease = onDecreaseClusterLeavesPageSize,
                     onIncrease = onIncreaseClusterLeavesPageSize
+                )
+                SettingsStepper(
+                    title = "Макс. дистанция в кластере",
+                    value = "${clusterSettings.maxDistanceKm} км",
+                    range = "$MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM-$MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM км",
+                    onDecrease = onDecreaseClusterMaxDistance,
+                    onIncrease = onIncreaseClusterMaxDistance
+                )
+                SettingsStepper(
+                    title = "Размер кластеров",
+                    value = "${clusterSettings.markerScalePercent}%",
+                    range = "$MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT-$MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT%",
+                    onDecrease = onDecreaseClusterMarkerScale,
+                    onIncrease = onIncreaseClusterMarkerScale
+                )
+                SettingsStepper(
+                    title = "Сетка миниатюр",
+                    value = "${clusterSettings.thumbnailCellSizePx} px",
+                    range = "$MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX-$MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX px",
+                    onDecrease = onDecreaseThumbnailCellSize,
+                    onIncrease = onIncreaseThumbnailCellSize
+                )
+                SettingsStepper(
+                    title = "Лимит миниатюр",
+                    value = clusterSettings.maxVisibleThumbnails.toString(),
+                    range = "$MIN_PHOTO_MAX_VISIBLE_THUMBNAILS-$MAX_PHOTO_MAX_VISIBLE_THUMBNAILS",
+                    onDecrease = onDecreaseMaxVisibleThumbnails,
+                    onIncrease = onIncreaseMaxVisibleThumbnails
+                )
+                SettingsStepper(
+                    title = "Предзагрузка миниатюр",
+                    value = "${clusterSettings.thumbnailPreloadPaddingPx} px",
+                    range = "$MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX-$MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX px",
+                    onDecrease = onDecreaseThumbnailPreloadPadding,
+                    onIncrease = onIncreaseThumbnailPreloadPadding
                 )
             }
 

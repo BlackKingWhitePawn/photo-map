@@ -1,6 +1,9 @@
 package com.example.photomap.ui.map
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -13,7 +16,9 @@ import android.os.Bundle
 import android.text.format.DateFormat
 import android.util.Log
 import android.util.Size
+import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,10 +62,15 @@ import com.example.photomap.R
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.domain.model.DevicePhoto
 import java.util.Date
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
@@ -70,7 +80,6 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory.fillColor
-import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.Point
@@ -294,21 +303,13 @@ private fun PhotoMapLibreMap(
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
+    var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
     val photosById = remember(photos) {
         photos.associateBy { photo -> photo.mediaId }
     }
     val latestPhotosById = rememberUpdatedState(photosById)
     val latestClusterSettings = rememberUpdatedState(clusterSettings)
-    val featureCollection by produceState(
-        initialValue = emptyPhotoFeatureCollection(),
-        photos
-    ) {
-        value = withContext(Dispatchers.Default) {
-            val collection = PhotoMapFeatureMapper.toFeatureCollection(photos)
-            Log.d(PhotoMapLogTag, "GeoJSON built: photos=${photos.size}, features=${collection.features()?.size}")
-            collection
-        }
-    }
+    val latestMapRenderState = rememberUpdatedState(mapRenderState)
     val cameraPositions = remember(photos) {
         photos.mapNotNull { photo ->
             photo.toMapPoint()?.let { point -> LatLng(point.latitude, point.longitude) }
@@ -329,6 +330,7 @@ private fun PhotoMapLibreMap(
                     runCatching {
                         mapLibreMap.handlePhotoMapClick(
                             point = point,
+                            renderState = latestMapRenderState.value,
                             photosById = latestPhotosById.value,
                             clusterSettings = latestClusterSettings.value,
                             onShowPhotos = { state -> bottomGalleryState = state }
@@ -375,45 +377,9 @@ private fun PhotoMapLibreMap(
         map,
         isStyleReady,
         styleGeneration,
-        featureCollection,
-        clusterSettings,
-        layerColors
-    ) {
-        val mapLibreMap = map ?: return@LaunchedEffect
-        if (!isStyleReady) {
-            return@LaunchedEffect
-        }
-
-        mapView.post {
-            val style = mapLibreMap.getStyle() ?: return@post
-            runCatching {
-                layerController.update(
-                    style = style,
-                    featureCollection = featureCollection,
-                    settings = clusterSettings,
-                    colors = layerColors,
-                    mapMaxZoom = mapLibreMap.getMaxZoomLevel()
-                )
-            }.onSuccess {
-                Log.d(
-                    PhotoMapLogTag,
-                    "Map layers updated: features=${featureCollection.features()?.size}, " +
-                        "radius=${clusterSettings.radiusPx}, minPoints=${clusterSettings.minPoints}, " +
-                        "mapMaxZoom=${mapLibreMap.getMaxZoomLevel()}"
-                )
-                thumbnailRefreshKey += 1
-            }.onFailure { error ->
-                Log.e(PhotoMapLogTag, "Failed to update MapLibre photo layers", error)
-            }
-        }
-    }
-
-    LaunchedEffect(
-        map,
-        isStyleReady,
-        styleGeneration,
         thumbnailRefreshKey,
         photosById,
+        clusterSettings,
         layerColors
     ) {
         val mapLibreMap = map ?: return@LaunchedEffect
@@ -421,28 +387,40 @@ private fun PhotoMapLibreMap(
             return@LaunchedEffect
         }
 
-        val visiblePhotoIds = mapLibreMap.visibleThumbnailCandidatePhotoIds(
+        val renderState = mapLibreMap.buildPhotoMapRenderState(
             photos = photosById.values,
             width = mapView.width,
-            height = mapView.height
+            height = mapView.height,
+            settings = clusterSettings
         )
+        mapRenderState = renderState
         val visibleThumbnailFeatureCollection = withContext(Dispatchers.Default) {
             PhotoMapFeatureMapper.toFeatureCollection(
-                visiblePhotoIds.mapNotNull { photoId -> photosById[photoId] }
+                renderState.thumbnailPhotoIds.mapNotNull { photoId -> photosById[photoId] }
             )
         }
         val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        layerController.update(
+            style = style,
+            featureCollection = renderState.clusterFeatureCollection,
+            settings = clusterSettings,
+            colors = layerColors
+        )
         layerController.updateVisibleThumbnails(
             style = style,
             featureCollection = visibleThumbnailFeatureCollection
         )
-        val missingPhotoIds = visiblePhotoIds
+        val missingPhotoIds = renderState.thumbnailPhotoIds
             .filter { photoId -> !thumbnailImageRegistry.contains(photoThumbnailImageKey(photoId)) }
             .take(MaxThumbnailImagesPerPass)
         Log.d(
             PhotoMapLogTag,
-            "Thumbnail refresh: visibleCandidates=${visiblePhotoIds.size}, " +
-                "missing=${missingPhotoIds.size}, cached=${thumbnailImageRegistry.size}"
+            "Map render refresh: photos=${photosById.size}, clusters=${renderState.clusterCount}, " +
+                "singles=${renderState.singleCount}, thumbnails=${renderState.thumbnailPhotoIds.size}, " +
+                "missing=${missingPhotoIds.size}, cached=${thumbnailImageRegistry.size}, " +
+                "projected=${renderState.projectedPhotoCount}, baseRadius=${clusterSettings.radiusPx}, " +
+                "effectiveRadius=${renderState.effectiveClusterRadiusPx.roundToInt()}, " +
+                "zoom=${mapLibreMap.cameraPosition.zoom}, maxDistanceKm=${clusterSettings.maxDistanceKm}"
         )
         if (missingPhotoIds.isEmpty()) {
             return@LaunchedEffect
@@ -529,9 +507,7 @@ private fun PhotoMapLibreMap(
             BottomPhotoGallery(
                 state = state,
                 onLoadMore = {
-                    val mapLibreMap = map ?: return@BottomPhotoGallery
-                    val nextState = mapLibreMap.loadNextClusterPage(
-                        state = state,
+                    val nextState = state.loadNextPage(
                         photosById = latestPhotosById.value,
                         pageSize = latestClusterSettings.value.leavesPageSize
                     )
@@ -539,6 +515,7 @@ private fun PhotoMapLibreMap(
                         bottomGalleryState = nextState
                     }
                 },
+                onOpenPhoto = { photo -> context.openPhotoInDefaultGallery(photo) },
                 onClose = { bottomGalleryState = null },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -552,6 +529,7 @@ private fun PhotoMapLibreMap(
 private fun BottomPhotoGallery(
     state: BottomGalleryState,
     onLoadMore: () -> Unit,
+    onOpenPhoto: (DevicePhoto) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -581,7 +559,10 @@ private fun BottomPhotoGallery(
                     items = state.photos,
                     key = { photo -> photo.mediaId }
                 ) { photo ->
-                    BottomPhotoThumbnail(photo = photo)
+                    BottomPhotoThumbnail(
+                        photo = photo,
+                        onOpenPhoto = onOpenPhoto
+                    )
                 }
             }
 
@@ -612,7 +593,10 @@ private fun BottomPhotoGallery(
 }
 
 @Composable
-private fun BottomPhotoThumbnail(photo: DevicePhoto) {
+private fun BottomPhotoThumbnail(
+    photo: DevicePhoto,
+    onOpenPhoto: (DevicePhoto) -> Unit
+) {
     val context = LocalContext.current
     val thumbnail by produceState<Bitmap?>(initialValue = null, photo.uri) {
         value = withContext(Dispatchers.IO) {
@@ -629,11 +613,15 @@ private fun BottomPhotoThumbnail(photo: DevicePhoto) {
             bitmap = requireNotNull(thumbnail).asImageBitmap(),
             contentDescription = photo.displayName,
             contentScale = ContentScale.Crop,
-            modifier = Modifier.size(76.dp)
+            modifier = Modifier
+                .size(76.dp)
+                .clickable { onOpenPhoto(photo) }
         )
     } else {
         Surface(
-            modifier = Modifier.size(76.dp),
+            modifier = Modifier
+                .size(76.dp)
+                .clickable { onOpenPhoto(photo) },
             color = MaterialTheme.colorScheme.surfaceVariant,
             shape = MaterialTheme.shapes.small
         ) {
@@ -677,17 +665,28 @@ private fun Context.loadPhotoPreviewBitmap(
 
 private fun MapLibreMap.handlePhotoMapClick(
     point: LatLng,
+    renderState: PhotoMapRenderState,
     photosById: Map<Long, DevicePhoto>,
     clusterSettings: PhotoClusterSettings,
     onShowPhotos: (BottomGalleryState) -> Unit
 ): Boolean {
-    val photoIds = photoIdsNearTap(
+    val screenPoint = projection.toScreenLocation(point)
+    val renderItem = renderState.findHit(
+        screenX = screenPoint.x,
+        screenY = screenPoint.y,
+        settings = clusterSettings
+    )
+    val photoIds = renderItem?.photoIds ?: photoIdsNearTap(
         point = point,
         photos = photosById.values,
         hitSlopPx = MapTapHitSlopPx,
         maxResults = clusterSettings.leavesPageSize
     )
-    Log.d(PhotoMapLogTag, "Photo projection hit-test: photoIds=${photoIds.distinct().size}")
+    Log.d(
+        PhotoMapLogTag,
+        "Photo projection hit-test: photoIds=${photoIds.distinct().size}, " +
+            "renderHit=${renderItem?.id}, isCluster=${renderItem?.isCluster}"
+    )
 
     return when (val action = PhotoMapClickDecision.forUnclustered(photoIds)) {
         PhotoMapTapAction.NoAction,
@@ -696,14 +695,24 @@ private fun MapLibreMap.handlePhotoMapClick(
 
         is PhotoMapTapAction.OpenPhoto -> {
             val photo = photosById[action.photoId] ?: return false
-            onShowPhotos(BottomGalleryState(photos = listOf(photo)))
+            onShowPhotos(
+                BottomGalleryState(
+                    photos = listOf(photo),
+                    totalCount = 1,
+                    allPhotoIds = listOf(photo.mediaId)
+                )
+            )
             true
         }
 
         is PhotoMapTapAction.ShowPhotos -> {
-            val photos = action.photoIds.mapNotNull { photoId -> photosById[photoId] }
-            if (photos.isNotEmpty()) {
-                onShowPhotos(BottomGalleryState(photos = photos))
+            val state = bottomGalleryStateForPhotoIds(
+                photoIds = action.photoIds,
+                photosById = photosById,
+                pageSize = clusterSettings.leavesPageSize
+            )
+            if (state != null) {
+                onShowPhotos(state)
                 true
             } else {
                 false
@@ -746,79 +755,63 @@ private fun MapLibreMap.photoIdsNearTap(
     }.getOrDefault(emptyList())
 }
 
-private fun MapLibreMap.loadNextClusterPage(
-    state: BottomGalleryState,
+private fun BottomGalleryState.loadNextPage(
     photosById: Map<Long, DevicePhoto>,
     pageSize: Int
 ): BottomGalleryState? {
-    val clusterFeature = state.clusterFeature ?: return null
-    if (!state.canLoadMore) {
+    if (!canLoadMore) {
         return null
     }
 
-    val photos = loadClusterPhotos(
-        clusterFeature = clusterFeature,
-        photosById = photosById,
-        pageSize = pageSize,
-        offset = state.photos.size.toLong()
-    )
-    if (photos.isEmpty()) {
-        return state.copy(totalCount = state.photos.size)
+    val nextPhotos = allPhotoIds
+        .drop(photos.size)
+        .take(pageSize.coerceAtLeast(1))
+        .mapNotNull { photoId -> photosById[photoId] }
+    if (nextPhotos.isEmpty()) {
+        return copy(totalCount = photos.size)
     }
 
-    return state.copy(
-        photos = (state.photos + photos).distinctBy { photo -> photo.mediaId }
-    )
+    return copy(photos = (photos + nextPhotos).distinctBy { photo -> photo.mediaId })
 }
 
-private fun MapLibreMap.loadClusterPhotos(
-    clusterFeature: Feature,
+private fun bottomGalleryStateForPhotoIds(
+    photoIds: List<Long>,
     photosById: Map<Long, DevicePhoto>,
-    pageSize: Int,
-    offset: Long
-): List<DevicePhoto> {
-    val source = getStyle()?.getSourceAs<GeoJsonSource>(PHOTO_MAP_SOURCE_ID)
-    if (source == null) {
-        Log.w(PhotoMapLogTag, "Cluster leaves requested before source is available")
-        return emptyList()
+    pageSize: Int
+): BottomGalleryState? {
+    val availablePhotoIds = photoIds.distinct().filter { photoId -> photosById.containsKey(photoId) }
+    if (availablePhotoIds.isEmpty()) {
+        return null
     }
-    val leaves = runCatching {
-        source.getClusterLeaves(clusterFeature, pageSize.toLong(), offset).features()
-    }.onFailure { error ->
-        Log.e(PhotoMapLogTag, "Failed to load cluster leaves: pageSize=$pageSize, offset=$offset", error)
-    }.getOrNull().orEmpty()
 
-    return leaves.mapNotNull { feature ->
-        feature.photoId()?.let { photoId -> photosById[photoId] }
-    }
+    return BottomGalleryState(
+        photos = availablePhotoIds
+            .take(pageSize.coerceAtLeast(1))
+            .mapNotNull { photoId -> photosById[photoId] },
+        totalCount = availablePhotoIds.size,
+        allPhotoIds = availablePhotoIds
+    )
 }
 
-private fun Feature.clusterLatLngOr(fallback: LatLng): LatLng {
-    val point = geometry() as? Point ?: return fallback
-    return LatLng(point.latitude(), point.longitude())
-}
-
-private fun Feature.pointCount(): Int? {
-    return getNumberProperty("point_count")?.toInt()
-}
-
-private fun MapLibreMap.visibleThumbnailCandidatePhotoIds(
+private fun MapLibreMap.buildPhotoMapRenderState(
     photos: Collection<DevicePhoto>,
     width: Int,
-    height: Int
-): List<Long> {
+    height: Int,
+    settings: PhotoClusterSettings
+): PhotoMapRenderState {
     if (width <= 0 || height <= 0 || photos.isEmpty()) {
-        return emptyList()
+        return PhotoMapRenderState.Empty
     }
 
-    val minX = -MapThumbnailPreloadPaddingPx
-    val minY = -MapThumbnailPreloadPaddingPx
-    val maxX = width + MapThumbnailPreloadPaddingPx
-    val maxY = height + MapThumbnailPreloadPaddingPx
     val centerX = width / 2f
     val centerY = height / 2f
     return runCatching {
-        photos.asSequence()
+        val padding = settings.thumbnailPreloadPaddingPx.toFloat()
+        val minX = -padding
+        val minY = -padding
+        val maxX = width + padding
+        val maxY = height + padding
+        val projectedPhotos = photos.asSequence()
             .mapNotNull { photo ->
                 val point = photo.toMapPoint() ?: return@mapNotNull null
                 val screenPoint = projection.toScreenLocation(LatLng(point.latitude, point.longitude))
@@ -828,18 +821,165 @@ private fun MapLibreMap.visibleThumbnailCandidatePhotoIds(
 
                 val dx = screenPoint.x - centerX
                 val dy = screenPoint.y - centerY
-                VisiblePhotoCandidate(
-                    photoId = photo.mediaId,
+                ProjectedMapPhoto(
+                    photo = photo,
+                    point = point,
+                    screenX = screenPoint.x,
+                    screenY = screenPoint.y,
                     distanceFromCenter = dx * dx + dy * dy
                 )
             }
             .sortedBy { candidate -> candidate.distanceFromCenter }
-            .take(MaxThumbnailCandidatePhotoIds)
-            .map { candidate -> candidate.photoId }
             .toList()
+        val effectiveClusterRadiusPx = effectiveClusterRadiusPx(
+            width = width,
+            height = height,
+            zoom = cameraPosition.zoom,
+            settings = settings
+        )
+        val items = clusterProjectedPhotos(
+            projectedPhotos = projectedPhotos,
+            radiusPx = effectiveClusterRadiusPx,
+            minPoints = settings.minPoints,
+            maxDistanceKm = settings.maxDistanceKm.toDouble()
+        )
+        val clusterFeatures = items
+            .filter { item -> item.isCluster }
+            .map { item -> item.toClusterFeature() }
+        val thumbnailPhotoIds = visibleThumbnailPhotoIds(
+            items = items,
+            width = width,
+            height = height,
+            settings = settings
+        )
+
+        PhotoMapRenderState(
+            items = items,
+            thumbnailPhotoIds = thumbnailPhotoIds,
+            clusterFeatureCollection = FeatureCollection.fromFeatures(clusterFeatures),
+            projectedPhotoCount = projectedPhotos.size,
+            effectiveClusterRadiusPx = effectiveClusterRadiusPx
+        )
     }.onFailure { error ->
-        Log.w(PhotoMapLogTag, "Failed to calculate visible thumbnail candidates", error)
-    }.getOrDefault(emptyList())
+        Log.w(PhotoMapLogTag, "Failed to build photo map render state", error)
+    }.getOrDefault(PhotoMapRenderState.Empty)
+}
+
+private fun clusterProjectedPhotos(
+    projectedPhotos: List<ProjectedMapPhoto>,
+    radiusPx: Float,
+    minPoints: Int,
+    maxDistanceKm: Double
+): List<PhotoMapRenderItem> {
+    if (projectedPhotos.isEmpty()) {
+        return emptyList()
+    }
+
+    val clusters = mutableListOf<MutableMapPhotoCluster>()
+    val clustersByCell = mutableMapOf<ScreenGridCell, MutableList<MutableMapPhotoCluster>>()
+    val cellSize = radiusPx.coerceAtLeast(1f)
+    projectedPhotos.forEach { projectedPhoto ->
+        val cell = projectedPhoto.screenCell(cellSize)
+        val targetCluster = cell.neighbors()
+            .asSequence()
+            .flatMap { neighbor -> clustersByCell[neighbor].orEmpty().asSequence() }
+            .distinct()
+            .filter { cluster ->
+                cluster.screenDistanceSquaredTo(projectedPhoto) <= radiusPx * radiusPx &&
+                    cluster.canAccept(projectedPhoto, maxDistanceKm)
+            }
+            .minByOrNull { cluster -> cluster.screenDistanceSquaredTo(projectedPhoto) }
+
+        if (targetCluster == null) {
+            val cluster = MutableMapPhotoCluster(projectedPhoto, cell)
+            clusters += cluster
+            clustersByCell.getOrPut(cell) { mutableListOf() }.add(cluster)
+        } else {
+            val previousCell = targetCluster.cell
+            targetCluster.add(projectedPhoto)
+            val nextCell = targetCluster.screenCell(cellSize)
+            if (nextCell != previousCell) {
+                clustersByCell[previousCell]?.remove(targetCluster)
+                clustersByCell.getOrPut(nextCell) { mutableListOf() }.add(targetCluster)
+                targetCluster.cell = nextCell
+            }
+        }
+    }
+
+    return clusters.flatMapIndexed { index, cluster ->
+        if (cluster.size >= minPoints) {
+            listOf(cluster.toRenderItem(index))
+        } else {
+            cluster.toSingleItems()
+        }
+    }
+}
+
+private fun effectiveClusterRadiusPx(
+    width: Int,
+    height: Int,
+    zoom: Double,
+    settings: PhotoClusterSettings
+): Float {
+    val baseRadius = settings.radiusPx.toFloat()
+    val viewportMinSide = minOf(width, height).toFloat().coerceAtLeast(baseRadius)
+    val viewportMaxSide = maxOf(width, height).toFloat().coerceAtLeast(baseRadius)
+    val viewportRadius = when {
+        zoom <= CityWideClusterZoom -> viewportMinSide * 0.68f
+        zoom <= DistrictClusterZoom -> viewportMinSide * 0.50f
+        zoom <= NeighborhoodClusterZoom -> viewportMinSide * 0.32f
+        else -> baseRadius
+    }
+    return max(baseRadius, viewportRadius)
+        .coerceAtMost(viewportMaxSide)
+}
+
+private fun visibleThumbnailPhotoIds(
+    items: List<PhotoMapRenderItem>,
+    width: Int,
+    height: Int,
+    settings: PhotoClusterSettings
+): List<Long> {
+    val cellSize = settings.thumbnailCellSizePx.coerceAtLeast(1).toFloat()
+    val centerX = width / 2f
+    val centerY = height / 2f
+    val occupiedCells = LinkedHashMap<ScreenGridCell, PhotoMapRenderItem>()
+    items.asSequence()
+        .filter { item -> !item.isCluster }
+        .sortedBy { item ->
+            val dx = item.screenX - centerX
+            val dy = item.screenY - centerY
+            dx * dx + dy * dy
+        }
+        .forEach { item ->
+            occupiedCells.putIfAbsent(item.screenCell(cellSize), item)
+        }
+
+    return occupiedCells.values
+        .asSequence()
+        .take(settings.maxVisibleThumbnails.coerceAtLeast(1))
+        .mapNotNull { item -> item.photoIds.firstOrNull() }
+        .toList()
+}
+
+private fun Context.openPhotoInDefaultGallery(photo: DevicePhoto) {
+    val uri = Uri.parse(photo.uri)
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, photo.mimeType ?: "image/*")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (this@openPhotoInDefaultGallery !is Activity) {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+    try {
+        startActivity(intent)
+    } catch (exception: ActivityNotFoundException) {
+        Log.w(PhotoMapLogTag, "No external gallery app found: photoId=${photo.mediaId}", exception)
+        Toast.makeText(this, "Не удалось открыть фото", Toast.LENGTH_SHORT).show()
+    } catch (exception: RuntimeException) {
+        Log.w(PhotoMapLogTag, "Failed to open photo externally: photoId=${photo.mediaId}", exception)
+        Toast.makeText(this, "Не удалось открыть фото", Toast.LENGTH_SHORT).show()
+    }
 }
 
 private fun Context.createFixedMapThumbnailBitmap(
@@ -924,6 +1064,213 @@ private data class VisiblePhotoCandidate(
     val photoId: Long,
     val distanceFromCenter: Float
 )
+
+private data class PhotoMapRenderState(
+    val items: List<PhotoMapRenderItem>,
+    val thumbnailPhotoIds: List<Long>,
+    val clusterFeatureCollection: FeatureCollection,
+    val projectedPhotoCount: Int,
+    val effectiveClusterRadiusPx: Float
+) {
+    val clusterCount: Int
+        get() = items.count { item -> item.isCluster }
+
+    val singleCount: Int
+        get() = items.count { item -> !item.isCluster }
+
+    fun findHit(
+        screenX: Float,
+        screenY: Float,
+        settings: PhotoClusterSettings
+    ): PhotoMapRenderItem? {
+        return items
+            .asSequence()
+            .mapNotNull { item ->
+                val dx = item.screenX - screenX
+                val dy = item.screenY - screenY
+                val distanceSquared = dx * dx + dy * dy
+                val hitRadius = if (item.isCluster) {
+                    (24f * settings.markerScalePercent.coerceIn(80, 200) / 100f) + 18f
+                } else {
+                    MapTapHitSlopPx
+                }
+                if (distanceSquared <= hitRadius * hitRadius) {
+                    item to distanceSquared
+                } else {
+                    null
+                }
+            }
+            .minByOrNull { (_, distanceSquared) -> distanceSquared }
+            ?.first
+    }
+
+    companion object {
+        val Empty = PhotoMapRenderState(
+            items = emptyList(),
+            thumbnailPhotoIds = emptyList(),
+            clusterFeatureCollection = emptyPhotoFeatureCollection(),
+            projectedPhotoCount = 0,
+            effectiveClusterRadiusPx = 0f
+        )
+    }
+}
+
+private data class PhotoMapRenderItem(
+    val id: String,
+    val latitude: Double,
+    val longitude: Double,
+    val screenX: Float,
+    val screenY: Float,
+    val photoIds: List<Long>
+) {
+    val isCluster: Boolean
+        get() = photoIds.size > 1
+
+    fun toClusterFeature(): Feature {
+        return Feature.fromGeometry(Point.fromLngLat(longitude, latitude)).apply {
+            addStringProperty(PHOTO_CLUSTER_ID_PROPERTY, id)
+            addNumberProperty(PHOTO_CLUSTER_COUNT_PROPERTY, photoIds.size)
+            addStringProperty(PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY, photoIds.size.abbreviatedCount())
+        }
+    }
+}
+
+private data class ProjectedMapPhoto(
+    val photo: DevicePhoto,
+    val point: PhotoMapPoint,
+    val screenX: Float,
+    val screenY: Float,
+    val distanceFromCenter: Float
+) {
+    fun screenCell(cellSize: Float): ScreenGridCell {
+        return ScreenGridCell(
+            x = floor(screenX / cellSize).toInt(),
+            y = floor(screenY / cellSize).toInt()
+        )
+    }
+}
+
+private data class ScreenGridCell(
+    val x: Int,
+    val y: Int
+) {
+    fun neighbors(): Sequence<ScreenGridCell> = sequence {
+        for (dx in -1..1) {
+            for (dy in -1..1) {
+                yield(ScreenGridCell(x + dx, y + dy))
+            }
+        }
+    }
+}
+
+private class MutableMapPhotoCluster(
+    firstPhoto: ProjectedMapPhoto,
+    var cell: ScreenGridCell
+) {
+    private val photos = mutableListOf(firstPhoto)
+    var screenX: Float = firstPhoto.screenX
+        private set
+    var screenY: Float = firstPhoto.screenY
+        private set
+    private var latitude: Double = firstPhoto.point.latitude
+    private var longitude: Double = firstPhoto.point.longitude
+
+    val size: Int
+        get() = photos.size
+
+    fun add(projectedPhoto: ProjectedMapPhoto) {
+        photos += projectedPhoto
+        screenX = photos.map { photo -> photo.screenX }.average().toFloat()
+        screenY = photos.map { photo -> photo.screenY }.average().toFloat()
+        latitude = photos.map { photo -> photo.point.latitude }.average()
+        longitude = photos.map { photo -> photo.point.longitude }.average()
+    }
+
+    fun canAccept(projectedPhoto: ProjectedMapPhoto, maxDistanceKm: Double): Boolean {
+        return photos.all { photo ->
+            haversineDistanceKm(
+                firstLatitude = photo.point.latitude,
+                firstLongitude = photo.point.longitude,
+                secondLatitude = projectedPhoto.point.latitude,
+                secondLongitude = projectedPhoto.point.longitude
+            ) <= maxDistanceKm
+        }
+    }
+
+    fun screenDistanceSquaredTo(projectedPhoto: ProjectedMapPhoto): Float {
+        val dx = projectedPhoto.screenX - screenX
+        val dy = projectedPhoto.screenY - screenY
+        return dx * dx + dy * dy
+    }
+
+    fun screenCell(cellSize: Float): ScreenGridCell {
+        return ScreenGridCell(
+            x = floor(screenX / cellSize).toInt(),
+            y = floor(screenY / cellSize).toInt()
+        )
+    }
+
+    fun toRenderItem(index: Int): PhotoMapRenderItem {
+        val photoIds = photos.map { photo -> photo.photo.mediaId }
+        return PhotoMapRenderItem(
+            id = "cluster-${index}-${photoIds.firstOrNull() ?: 0L}",
+            latitude = latitude,
+            longitude = longitude,
+            screenX = screenX,
+            screenY = screenY,
+            photoIds = photoIds
+        )
+    }
+
+    fun toSingleItems(): List<PhotoMapRenderItem> {
+        return photos.map { photo ->
+            PhotoMapRenderItem(
+                id = "photo-${photo.photo.mediaId}",
+                latitude = photo.point.latitude,
+                longitude = photo.point.longitude,
+                screenX = photo.screenX,
+                screenY = photo.screenY,
+                photoIds = listOf(photo.photo.mediaId)
+            )
+        }
+    }
+}
+
+private fun PhotoMapRenderItem.screenCell(cellSize: Float): ScreenGridCell {
+    return ScreenGridCell(
+        x = floor(screenX / cellSize).toInt(),
+        y = floor(screenY / cellSize).toInt()
+    )
+}
+
+private fun haversineDistanceKm(
+    firstLatitude: Double,
+    firstLongitude: Double,
+    secondLatitude: Double,
+    secondLongitude: Double
+): Double {
+    val firstLatitudeRad = Math.toRadians(firstLatitude)
+    val secondLatitudeRad = Math.toRadians(secondLatitude)
+    val deltaLatitudeRad = Math.toRadians(secondLatitude - firstLatitude)
+    val deltaLongitudeRad = Math.toRadians(secondLongitude - firstLongitude)
+    val halfChord = sin(deltaLatitudeRad / 2.0) * sin(deltaLatitudeRad / 2.0) +
+        cos(firstLatitudeRad) * cos(secondLatitudeRad) *
+        sin(deltaLongitudeRad / 2.0) * sin(deltaLongitudeRad / 2.0)
+    val normalizedHalfChord = halfChord.coerceIn(0.0, 1.0)
+    val angularDistance = 2.0 * atan2(
+        sqrt(normalizedHalfChord),
+        sqrt(1.0 - normalizedHalfChord)
+    )
+    return EarthRadiusKm * angularDistance
+}
+
+private fun Int.abbreviatedCount(): String {
+    return when {
+        this < 1000 -> toString()
+        this < 1_000_000 -> "${this / 1000}k"
+        else -> "${this / 1_000_000}m"
+    }
+}
 
 private fun Bitmap.toSoftwareBitmapForCanvas(photoId: Long): Bitmap? {
     if (config != Bitmap.Config.HARDWARE) {
@@ -1049,16 +1396,16 @@ private fun emptyPhotoFeatureCollection(): FeatureCollection {
 
 private data class BottomGalleryState(
     val photos: List<DevicePhoto>,
-    val totalCount: Int? = null,
-    val clusterFeature: Feature? = null
+    val totalCount: Int,
+    val allPhotoIds: List<Long>
 ) {
     val canLoadMore: Boolean
-        get() = clusterFeature != null && totalCount != null && photos.size < totalCount
+        get() = photos.size < totalCount
 
     val title: String
         get() = when {
-            totalCount != null && canLoadMore -> "Фотографий: ${photos.size} из $totalCount"
-            totalCount != null -> "Фотографий: $totalCount"
+            canLoadMore -> "Фотографий: ${photos.size} из $totalCount"
+            totalCount > 1 -> "Фотографий: $totalCount"
             photos.size == 1 -> "Фотография"
             else -> "Фотографий: ${photos.size}"
         }
@@ -1073,10 +1420,12 @@ private const val MapThumbnailHeightDp = 56f
 private const val MapThumbnailBorderPx = 4f
 private const val MapThumbnailCornerRadiusPx = 14f
 private const val MapThumbnailInnerCornerRadiusPx = 10f
-private const val MapThumbnailPreloadPaddingPx = 96f
 private const val MaxCachedMapThumbnailImages = 360
-private const val MaxThumbnailCandidatePhotoIds = 240
 private const val MaxThumbnailImagesPerPass = 80
+private const val CityWideClusterZoom = 11.0
+private const val DistrictClusterZoom = 12.5
+private const val NeighborhoodClusterZoom = 14.0
+private const val EarthRadiusKm = 6371.0
 private const val PhotoMapLogTag = "PhotoMapMap"
 
 private const val LandFillColor = "#E7ECE6"

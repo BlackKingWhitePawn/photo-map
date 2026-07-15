@@ -6,16 +6,36 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.photomap.core.permissions.PhotoPermissionManager
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
+import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX
+import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
+import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
+import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX
+import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.PHOTO_CLUSTER_LEAVES_PAGE_SIZE_STEP
+import com.example.photomap.core.settings.PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+import com.example.photomap.core.settings.PHOTO_CLUSTER_MARKER_SCALE_PERCENT_STEP
+import com.example.photomap.core.settings.PHOTO_CLUSTER_MAX_DISTANCE_KM
+import com.example.photomap.core.settings.PHOTO_CLUSTER_MAX_DISTANCE_KM_STEP
 import com.example.photomap.core.settings.PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.PHOTO_CLUSTER_RADIUS_STEP
+import com.example.photomap.core.settings.PHOTO_MAX_VISIBLE_THUMBNAILS
+import com.example.photomap.core.settings.PHOTO_MAX_VISIBLE_THUMBNAILS_STEP
+import com.example.photomap.core.settings.PHOTO_THUMBNAIL_CELL_SIZE_PX
+import com.example.photomap.core.settings.PHOTO_THUMBNAIL_CELL_SIZE_PX_STEP
+import com.example.photomap.core.settings.PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+import com.example.photomap.core.settings.PHOTO_THUMBNAIL_PRELOAD_PADDING_PX_STEP
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
@@ -238,6 +258,66 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun increaseClusterMaxDistance() {
+        updateClusterSettings {
+            copy(maxDistanceKm = maxDistanceKm + PHOTO_CLUSTER_MAX_DISTANCE_KM_STEP)
+        }
+    }
+
+    fun decreaseClusterMaxDistance() {
+        updateClusterSettings {
+            copy(maxDistanceKm = maxDistanceKm - PHOTO_CLUSTER_MAX_DISTANCE_KM_STEP)
+        }
+    }
+
+    fun increaseClusterMarkerScale() {
+        updateClusterSettings {
+            copy(markerScalePercent = markerScalePercent + PHOTO_CLUSTER_MARKER_SCALE_PERCENT_STEP)
+        }
+    }
+
+    fun decreaseClusterMarkerScale() {
+        updateClusterSettings {
+            copy(markerScalePercent = markerScalePercent - PHOTO_CLUSTER_MARKER_SCALE_PERCENT_STEP)
+        }
+    }
+
+    fun increaseThumbnailCellSize() {
+        updateClusterSettings {
+            copy(thumbnailCellSizePx = thumbnailCellSizePx + PHOTO_THUMBNAIL_CELL_SIZE_PX_STEP)
+        }
+    }
+
+    fun decreaseThumbnailCellSize() {
+        updateClusterSettings {
+            copy(thumbnailCellSizePx = thumbnailCellSizePx - PHOTO_THUMBNAIL_CELL_SIZE_PX_STEP)
+        }
+    }
+
+    fun increaseMaxVisibleThumbnails() {
+        updateClusterSettings {
+            copy(maxVisibleThumbnails = maxVisibleThumbnails + PHOTO_MAX_VISIBLE_THUMBNAILS_STEP)
+        }
+    }
+
+    fun decreaseMaxVisibleThumbnails() {
+        updateClusterSettings {
+            copy(maxVisibleThumbnails = maxVisibleThumbnails - PHOTO_MAX_VISIBLE_THUMBNAILS_STEP)
+        }
+    }
+
+    fun increaseThumbnailPreloadPadding() {
+        updateClusterSettings {
+            copy(thumbnailPreloadPaddingPx = thumbnailPreloadPaddingPx + PHOTO_THUMBNAIL_PRELOAD_PADDING_PX_STEP)
+        }
+    }
+
+    fun decreaseThumbnailPreloadPadding() {
+        updateClusterSettings {
+            copy(thumbnailPreloadPaddingPx = thumbnailPreloadPaddingPx - PHOTO_THUMBNAIL_PRELOAD_PADDING_PX_STEP)
+        }
+    }
+
     private fun refreshIndexedPhotos() {
         viewModelScope.launch {
             val photos = photoReader.readIndexedPhotos()
@@ -272,13 +352,29 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         const val ClusterRadiusKey = "cluster_radius_px"
         const val ClusterMinPointsKey = "cluster_min_points"
         const val ClusterLeavesPageSizeKey = "cluster_leaves_page_size"
+        const val ClusterMaxDistanceKmKey = "cluster_max_distance_km"
+        const val ClusterMarkerScalePercentKey = "cluster_marker_scale_percent"
+        const val ThumbnailCellSizePxKey = "thumbnail_cell_size_px"
+        const val MaxVisibleThumbnailsKey = "max_visible_thumbnails"
+        const val ThumbnailPreloadPaddingPxKey = "thumbnail_preload_padding_px"
     }
 
     private fun readClusterSettings(): PhotoClusterSettings {
         return PhotoClusterSettings(
             radiusPx = settings.getInt(ClusterRadiusKey, PHOTO_CLUSTER_RADIUS),
             minPoints = settings.getInt(ClusterMinPointsKey, PHOTO_CLUSTER_MIN_POINTS),
-            leavesPageSize = settings.getInt(ClusterLeavesPageSizeKey, PHOTO_CLUSTER_LEAVES_PAGE_SIZE)
+            leavesPageSize = settings.getInt(ClusterLeavesPageSizeKey, PHOTO_CLUSTER_LEAVES_PAGE_SIZE),
+            maxDistanceKm = settings.getInt(ClusterMaxDistanceKmKey, PHOTO_CLUSTER_MAX_DISTANCE_KM),
+            markerScalePercent = settings.getInt(
+                ClusterMarkerScalePercentKey,
+                PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+            ),
+            thumbnailCellSizePx = settings.getInt(ThumbnailCellSizePxKey, PHOTO_THUMBNAIL_CELL_SIZE_PX),
+            maxVisibleThumbnails = settings.getInt(MaxVisibleThumbnailsKey, PHOTO_MAX_VISIBLE_THUMBNAILS),
+            thumbnailPreloadPaddingPx = settings.getInt(
+                ThumbnailPreloadPaddingPxKey,
+                PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
+            )
         ).normalized()
     }
 
@@ -295,6 +391,41 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 nextSettings.leavesPageSize.coerceIn(
                     MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE,
                     MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
+                )
+            )
+            .putInt(
+                ClusterMaxDistanceKmKey,
+                nextSettings.maxDistanceKm.coerceIn(
+                    MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM,
+                    MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
+                )
+            )
+            .putInt(
+                ClusterMarkerScalePercentKey,
+                nextSettings.markerScalePercent.coerceIn(
+                    MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT,
+                    MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
+                )
+            )
+            .putInt(
+                ThumbnailCellSizePxKey,
+                nextSettings.thumbnailCellSizePx.coerceIn(
+                    MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX,
+                    MAX_PHOTO_THUMBNAIL_CELL_SIZE_PX
+                )
+            )
+            .putInt(
+                MaxVisibleThumbnailsKey,
+                nextSettings.maxVisibleThumbnails.coerceIn(
+                    MIN_PHOTO_MAX_VISIBLE_THUMBNAILS,
+                    MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
+                )
+            )
+            .putInt(
+                ThumbnailPreloadPaddingPxKey,
+                nextSettings.thumbnailPreloadPaddingPx.coerceIn(
+                    MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX,
+                    MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
                 )
             )
             .apply()

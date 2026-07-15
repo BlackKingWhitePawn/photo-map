@@ -74,7 +74,17 @@ fun PhotoMapApp(
             onDecreaseClusterMinPoints = viewModel::decreaseClusterMinPoints,
             onIncreaseClusterMinPoints = viewModel::increaseClusterMinPoints,
             onDecreaseClusterLeavesPageSize = viewModel::decreaseClusterLeavesPageSize,
-            onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize
+            onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize,
+            onDecreaseClusterMaxDistance = viewModel::decreaseClusterMaxDistance,
+            onIncreaseClusterMaxDistance = viewModel::increaseClusterMaxDistance,
+            onDecreaseClusterMarkerScale = viewModel::decreaseClusterMarkerScale,
+            onIncreaseClusterMarkerScale = viewModel::increaseClusterMarkerScale,
+            onDecreaseThumbnailCellSize = viewModel::decreaseThumbnailCellSize,
+            onIncreaseThumbnailCellSize = viewModel::increaseThumbnailCellSize,
+            onDecreaseMaxVisibleThumbnails = viewModel::decreaseMaxVisibleThumbnails,
+            onIncreaseMaxVisibleThumbnails = viewModel::increaseMaxVisibleThumbnails,
+            onDecreaseThumbnailPreloadPadding = viewModel::decreaseThumbnailPreloadPadding,
+            onIncreaseThumbnailPreloadPadding = viewModel::increaseThumbnailPreloadPadding
         )
     }
 }

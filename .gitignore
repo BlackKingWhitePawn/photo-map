@@ -1,0 +1,23 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Application binaries
+*.apk
+*.aab
+*.apks
+
+# Signing files
+*.jks
+*.keystore
+keystore.properties
+
+# Logs
+*.log

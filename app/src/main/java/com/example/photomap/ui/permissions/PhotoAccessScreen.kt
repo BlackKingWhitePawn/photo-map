@@ -36,7 +36,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.example.photomap.R
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.photomap.core.permissions.PhotoAccessLevel
 import com.example.photomap.core.permissions.PhotoPermissionManager
@@ -203,7 +202,7 @@ private fun PhotoAccessTopBar(
             )
             OutlinedButton(onClick = onOpenAppSettings) {
                 Icon(
-                    painter = painterResource(id = R.drawable.ic_settings_24),
+                    painter = painterResource(id = android.R.drawable.ic_menu_preferences),
                     contentDescription = null,
                     modifier = Modifier.padding(end = 8.dp)
                 )
@@ -317,7 +316,7 @@ private fun PermissionSummaryCard(
                     onClick = onOpenAppSettings
                 ) {
                     Icon(
-                        painter = painterResource(id = R.drawable.ic_settings_24),
+                        painter = painterResource(id = android.R.drawable.ic_menu_preferences),
                         contentDescription = null,
                         modifier = Modifier.padding(end = 8.dp)
                     )

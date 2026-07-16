@@ -73,7 +73,11 @@ class PhotoClusterStore(
                 .toList()
         } else {
             database.getClustersInBounds(level, expandedBounds)
-                .map { cluster -> cluster.toVisiblePhotoMapItem() }
+                .map { cluster ->
+                    cluster.toVisiblePhotoMapItem(
+                        photoIds = database.getClusterPhotoIds(cluster.clusterId)
+                    )
+                }
         }
         val message = "Visible cluster query: level=$level, zoom=$zoom, items=${items.size}, " +
             "bounds=${expandedBounds.south},${expandedBounds.west},${expandedBounds.north},${expandedBounds.east}"

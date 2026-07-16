@@ -20,7 +20,12 @@ fun PhotoMapApp(
 ) {
     var screenStack by rememberSaveable { mutableStateOf(listOf(AppScreen.Map.name)) }
     val state by viewModel.uiState.collectAsState()
-    val currentScreen = AppScreen.valueOf(screenStack.last())
+    val requestedScreen = AppScreen.valueOf(screenStack.last())
+    val currentScreen = if (!state.permissionStatus.canReadImages && requestedScreen == AppScreen.Map) {
+        AppScreen.Photos
+    } else {
+        requestedScreen
+    }
 
     fun navigateTo(screen: AppScreen) {
         if (currentScreen != screen) {
@@ -55,12 +60,11 @@ fun PhotoMapApp(
             isScanPaused = state.isScanPaused,
             scanProcessed = state.scanProcessed,
             scanTotal = state.scanTotal,
-            onBack = { navigateBack() },
-            onScan = { viewModel.scanPhotos() },
             onPause = viewModel::pauseCurrentAction,
             onResume = viewModel::resumeCurrentAction,
             onCancel = viewModel::cancelCurrentAction,
             onOpenSettings = { navigateTo(AppScreen.Settings) },
+            onClusterDensityChanged = viewModel::setClusterDensityCoefficientPercent,
             onViewportChanged = viewModel::onMapViewportChanged
         )
 
@@ -78,8 +82,6 @@ fun PhotoMapApp(
             onIncreaseClusterMinPoints = viewModel::increaseClusterMinPoints,
             onDecreaseClusterLeavesPageSize = viewModel::decreaseClusterLeavesPageSize,
             onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize,
-            onDecreaseClusterMaxDistance = viewModel::decreaseClusterMaxDistance,
-            onIncreaseClusterMaxDistance = viewModel::increaseClusterMaxDistance,
             onDecreaseClusterDensityCoefficient = viewModel::decreaseClusterDensityCoefficient,
             onIncreaseClusterDensityCoefficient = viewModel::increaseClusterDensityCoefficient,
             onDecreaseClusterMarkerScale = viewModel::decreaseClusterMarkerScale,

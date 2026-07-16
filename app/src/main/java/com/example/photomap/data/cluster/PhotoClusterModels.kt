@@ -3,7 +3,7 @@ package com.example.photomap.data.cluster
 import kotlin.math.max
 import kotlin.math.min
 
-const val CLUSTERING_VERSION = 3
+const val CLUSTERING_VERSION = 4
 
 val StoredClusterLevels = listOf(4, 5, 6, 7, 9)
 
@@ -109,7 +109,7 @@ fun clusterLevelForZoom(zoom: Double): Int {
     }
 }
 
-fun StoredPhotoCluster.toVisiblePhotoMapItem(): VisiblePhotoMapItem {
+fun StoredPhotoCluster.toVisiblePhotoMapItem(photoIds: List<Long> = emptyList()): VisiblePhotoMapItem {
     return VisiblePhotoMapItem(
         id = clusterId,
         level = level,
@@ -122,7 +122,7 @@ fun StoredPhotoCluster.toVisiblePhotoMapItem(): VisiblePhotoMapItem {
         minLongitude = minLongitude,
         maxLongitude = maxLongitude,
         coverPhotoId = coverPhotoId,
-        photoIds = emptyList()
+        photoIds = photoIds
     )
 }
 

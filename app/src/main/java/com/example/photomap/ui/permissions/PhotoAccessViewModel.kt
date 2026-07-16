@@ -62,6 +62,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private val settings = application.getSharedPreferences(SettingsName, Context.MODE_PRIVATE)
     private val scanPauseState = MutableStateFlow(false)
     private var scanJob: Job? = null
+    private var clusterRebuildJob: Job? = null
     private var loadedClusterBounds: PhotoMapBounds? = null
     private var loadedClusterLevel: Int? = null
     private var lastViewportBounds: PhotoMapBounds? = null
@@ -296,6 +297,12 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun setClusterDensityCoefficientPercent(value: Int) {
+        updateClusterSettings {
+            copy(densityCoefficientPercent = value)
+        }
+    }
+
     fun increaseClusterMarkerScale() {
         updateClusterSettings {
             copy(markerScalePercent = markerScalePercent + PHOTO_CLUSTER_MARKER_SCALE_PERCENT_STEP)
@@ -415,7 +422,8 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private fun rebuildClusters(photos: List<DevicePhoto> = uiState.value.photos) {
         loadedClusterBounds = null
         loadedClusterLevel = null
-        viewModelScope.launch {
+        clusterRebuildJob?.cancel()
+        clusterRebuildJob = viewModelScope.launch {
             clusterStore.rebuildClusters(
                 photos = photos,
                 settings = uiState.value.clusterSettings
@@ -489,7 +497,12 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun updateClusterSettings(transform: PhotoClusterSettings.() -> PhotoClusterSettings) {
-        val nextSettings = uiState.value.clusterSettings.transform().normalized()
+        val currentSettings = uiState.value.clusterSettings
+        val nextSettings = currentSettings.transform().normalized()
+        if (nextSettings == currentSettings) {
+            return
+        }
+
         settings.edit()
             .putInt(ClusterRadiusKey, nextSettings.radiusPx.coerceIn(MIN_PHOTO_CLUSTER_RADIUS, MAX_PHOTO_CLUSTER_RADIUS))
             .putInt(

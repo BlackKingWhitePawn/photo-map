@@ -1,80 +1,62 @@
-# PR: Persistent photo index
+# PR: Map cluster tuning and overlay markers
 
 ## Summary
 
-* Added a local SQLite index for processed photos.
-* Persisted EXIF scan progress across app restarts.
-* Reused cached coordinates for unchanged `MediaStore` items.
-* Invalidated cache entries when `dateModified` or `size` changes.
-* Updated indexed metadata when a photo is renamed.
-* Removed missing `MediaStore` items from the local index only.
-* Replaced fixed 500-step progress with time-based progress updates and percent display.
-* Added GPS index status to the photo access screen.
+* Added persisted viewport cluster loading for large local photo libraries.
+* Added tunable cluster settings: radius, min points, max distance, density, marker scale, thumbnail grid, visible thumbnail limit, and preload padding.
+* Added a Compose overlay marker layer above MapLibre so visible clusters and thumbnails render reliably.
+* Added thumbnail cluster markers with a count badge.
+* Rendered single-photo stored items as photo markers instead of cluster circles.
+* Recomputed marker screen positions while the map camera moves.
+* Added a map debug panel with visible cluster count and coordinates.
+* Added a settings toggle for the debug panel.
+* Added unit tests for marker render rules and debug formatting helpers.
 
 ## Scope
 
-This PR covers a local persistent index for large galleries after the 40k performance branch.
+This PR focuses on the map screen marker experience and cluster tuning.
 
 Not included:
 
-* Full Room migration.
-* Gallery grid with Coil.
-* Fullscreen viewer.
+* Room migration.
+* Coil gallery grid.
+* Fullscreen photo viewer.
 * WorkManager background scan.
-* User-facing index cleanup settings.
+* Replacing the overlay with a fully style-native MapLibre marker implementation.
 
 ## Checks
 
-* `.\gradlew.bat assembleDebug` - passed.
-* Debug APK metadata inspected: `versionCode=5`, `versionName=0.4.0`.
+* Release APK prepared: `app/release/photomap-v0.6.0.apk`.
+* APK metadata inspected with `aapt2 dump badging`: `versionCode=8`, `versionName=0.6.0`.
 * APK permissions inspected with `aapt2 dump permissions`.
-* Source checked for MediaStore delete/write operations.
-
-The command was run with `JAVA_HOME` set to Android Studio JBR for the current process:
-
-```powershell
-$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
-```
-
-## Manual Review Notes
-
-On a device or emulator with photos:
-
-1. Launch the app.
-2. Tap `Предоставить доступ`.
-3. Grant full or selected photo access.
-4. Confirm the screen shows the number of found photos.
-5. Tap `Искать GPS в EXIF`.
-6. Close/reopen the app during or after scanning.
-7. Confirm `GPS-индекс` keeps the saved processed count.
-8. Rename a photo and confirm it is still present with updated metadata.
-9. Delete a photo outside the app and confirm it disappears from the app after refresh.
+* APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
+* Build and test commands were not run by Codex for this release prep, per the local project rule.
 
 ## Safety
 
-The app only requests read-oriented media permissions:
+The app remains read-only for user photos:
 
-* `READ_EXTERNAL_STORAGE` with `maxSdkVersion=32`;
-* `READ_MEDIA_IMAGES`;
-* `READ_MEDIA_VISUAL_USER_SELECTED`;
-* `ACCESS_MEDIA_LOCATION`.
-
-No source code path deletes, trashes, writes, updates, moves, or overwrites user photos. The only delete operation in this branch removes rows from the app's private local SQLite index.
-
-## Map
-
-The map keeps the existing MapLibre/OpenFreeMap setup and consumes the same `DevicePhoto` list. Cached coordinates from the local index are reused for map markers.
+* no MediaStore delete/trash/write requests;
+* no EXIF mutation;
+* no upload of photos, coordinates, EXIF, or file identifiers;
+* cluster and debug data stay local to the device.
 
 ## Release
 
 Target release:
 
 ```text
-v0.4.0
+v0.6.0
 ```
 
-Expected APK asset:
+APK asset:
 
 ```text
-photomap-v0.4.0.apk
+app/release/photomap-v0.6.0.apk
+```
+
+SHA-256:
+
+```text
+FB93066803C660B04D1D12B3021876E4718042E0A5914DAF9DE3DE0531510577
 ```

@@ -8,6 +8,24 @@
 
 Изменений пока нет.
 
+## [0.6.0] - 2026-07-16
+
+### Added
+
+* Added a Compose overlay for map markers so clusters and photo thumbnails stay visible above the MapLibre style.
+* Added thumbnail rendering for overlay cluster markers and single-photo markers.
+* Added a map debug panel with the count of visible clusters and their coordinates.
+* Added a settings toggle to show or hide the map debug panel, persisted in local settings.
+* Added unit-test coverage for marker render rules and debug information formatting.
+
+### Fixed
+
+* Fixed invisible map clusters and thumbnails by rendering marker UI independently of MapLibre style layers.
+* Fixed overlay marker positions so they are recalculated while the camera moves, instead of waiting for camera idle.
+* Fixed single-photo stored items so they render as photo markers instead of clusters.
+* Moved cluster counts into a small badge so they do not cover the thumbnail.
+* Added direct overlay marker taps: clusters zoom the map, and single photos open the preview panel.
+
 ## [0.5.1] - 2026-07-15
 
 ### Исправлено

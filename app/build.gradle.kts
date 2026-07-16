@@ -25,8 +25,8 @@ android {
         applicationId = "com.example.photomap"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.6.0"
+        versionCode = 9
+        versionName = "0.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\"", "\\\"")}\"")
@@ -40,8 +40,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
     buildFeatures {
         compose = true

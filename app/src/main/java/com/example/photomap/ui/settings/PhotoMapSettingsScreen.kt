@@ -29,7 +29,6 @@ import com.example.photomap.BuildConfig
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
-import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MAX_PHOTO_MAX_VISIBLE_THUMBNAILS
@@ -38,7 +37,6 @@ import com.example.photomap.core.settings.MAX_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MARKER_SCALE_PERCENT
-import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_MIN_POINTS
 import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_RADIUS
 import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
@@ -63,8 +61,6 @@ fun PhotoMapSettingsScreen(
     onIncreaseClusterMinPoints: () -> Unit,
     onDecreaseClusterLeavesPageSize: () -> Unit,
     onIncreaseClusterLeavesPageSize: () -> Unit,
-    onDecreaseClusterMaxDistance: () -> Unit,
-    onIncreaseClusterMaxDistance: () -> Unit,
     onDecreaseClusterDensityCoefficient: () -> Unit,
     onIncreaseClusterDensityCoefficient: () -> Unit,
     onDecreaseClusterMarkerScale: () -> Unit,
@@ -87,12 +83,6 @@ fun PhotoMapSettingsScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onBack) {
-                    Text(text = "Назад")
-                }
-            }
-
             Text(
                 text = "Настройки",
                 style = MaterialTheme.typography.headlineMedium,
@@ -121,13 +111,6 @@ fun PhotoMapSettingsScreen(
                     range = "$MIN_PHOTO_CLUSTER_LEAVES_PAGE_SIZE-$MAX_PHOTO_CLUSTER_LEAVES_PAGE_SIZE",
                     onDecrease = onDecreaseClusterLeavesPageSize,
                     onIncrease = onIncreaseClusterLeavesPageSize
-                )
-                SettingsStepper(
-                    title = "Макс. дистанция в кластере",
-                    value = "${clusterSettings.maxDistanceKm} км",
-                    range = "$MIN_PHOTO_CLUSTER_MAX_DISTANCE_KM-$MAX_PHOTO_CLUSTER_MAX_DISTANCE_KM км",
-                    onDecrease = onDecreaseClusterMaxDistance,
-                    onIncrease = onIncreaseClusterMaxDistance
                 )
                 SettingsStepper(
                     title = "Коэффициент плотности",
@@ -361,7 +344,7 @@ private fun PhotoAccessUiState.diagnosticHeader(): String {
         appendLine("Scan progress: $scanProcessed/$scanTotal")
         appendLine("Cluster radius px: ${settings.radiusPx}")
         appendLine("Cluster min points: ${settings.minPoints}")
-        appendLine("Cluster max distance km: ${settings.maxDistanceKm}")
+        appendLine("Cluster max distance formula: zoom*density")
         appendLine("Cluster density coefficient percent: ${settings.densityCoefficientPercent}")
         appendLine("Cluster marker scale percent: ${settings.markerScalePercent}")
         appendLine("Thumbnail cell size px: ${settings.thumbnailCellSizePx}")

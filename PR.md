@@ -1,36 +1,32 @@
-# PR: Map cluster tuning and overlay markers
+# PR: Map controls and v0.7.0 release prep
 
 ## Summary
 
-* Added persisted viewport cluster loading for large local photo libraries.
-* Added tunable cluster settings: radius, min points, max distance, density, marker scale, thumbnail grid, visible thumbnail limit, and preload padding.
-* Added a Compose overlay marker layer above MapLibre so visible clusters and thumbnails render reliably.
-* Added thumbnail cluster markers with a count badge.
-* Rendered single-photo stored items as photo markers instead of cluster circles.
-* Recomputed marker screen positions while the map camera moves.
-* Added a map debug panel with visible cluster count and coordinates.
-* Added a settings toggle for the debug panel.
-* Added unit tests for marker render rules and debug formatting helpers.
+* Prepared release metadata for `v0.7.0`.
+* Bumped Android version to `versionName=0.7.0`, `versionCode=9`.
+* Made the map debug panel hidden by default for new installs.
+* Polished map top-bar controls, safe-area handling, settings icon usage, and mini gallery controls.
+* Added an animated cluster-density FAB that shows the current density percent and expands into a full-width slider.
+* Updated visible map clustering so density affects the runtime marker layer and cluster labels use real photo IDs when available.
 
 ## Scope
 
-This PR focuses on the map screen marker experience and cluster tuning.
+This PR focuses on map UX, cluster-density behavior, debug-panel defaults, and release preparation.
 
 Not included:
 
+* Building or signing a release APK by Codex.
+* Running Gradle build, test, lint, `npx`, `tsc`, or `eslint` commands.
 * Room migration.
 * Coil gallery grid.
 * Fullscreen photo viewer.
 * WorkManager background scan.
-* Replacing the overlay with a fully style-native MapLibre marker implementation.
 
 ## Checks
 
-* Release APK prepared: `app/release/photomap-v0.6.0.apk`.
-* APK metadata inspected with `aapt2 dump badging`: `versionCode=8`, `versionName=0.6.0`.
-* APK permissions inspected with `aapt2 dump permissions`.
-* APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
 * Build and test commands were not run by Codex for this release prep, per the local project rule.
+* Release APK was not prepared by Codex.
+* APK metadata, permissions, and signature were not inspected by Codex for this release prep.
 
 ## Safety
 
@@ -46,17 +42,11 @@ The app remains read-only for user photos:
 Target release:
 
 ```text
-v0.6.0
+v0.7.0
 ```
 
-APK asset:
+Release notes:
 
 ```text
-app/release/photomap-v0.6.0.apk
-```
-
-SHA-256:
-
-```text
-FB93066803C660B04D1D12B3021876E4718042E0A5914DAF9DE3DE0531510577
+release-notes/v0.7.0.md
 ```

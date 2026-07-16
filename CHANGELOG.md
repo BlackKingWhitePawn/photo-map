@@ -8,6 +8,31 @@
 
 Изменений пока нет.
 
+## [0.7.0] - 2026-07-16
+
+### Added
+
+* Added explicit permission request flow handling for missing photo and media-location access.
+* Added a mini gallery for large map clusters with horizontal scrolling.
+* Added an animated density FAB that shows the current cluster density percent and expands into a full-width slider.
+
+### Changed
+
+* Removed the map title and back button from the map screen.
+* Moved map settings and centering actions into compact icon-only controls in the top bar.
+* Colored the top safe area with the map top bar surface and padded controls for status bars and display cutouts.
+* Replaced custom zoom/settings assets with standard Android drawable icons.
+* Removed the scan action from settings.
+* Changed visible map cluster tuning so density affects runtime clustering and distance limits.
+* The map debug panel now defaults to hidden for new installs.
+
+### Fixed
+
+* Fixed cluster gallery taps so tapping another cluster refreshes an already-open mini gallery.
+* Fixed cluster counts by building visible clusters from real photo IDs when available.
+* Fixed mini gallery controls by replacing the close button with an icon and removing zoom/load-more actions.
+* Kept Java compile compatibility at 1.8 so AGP does not require the `androidJdkImage`/`jlink` transform in this project setup.
+
 ## [0.6.0] - 2026-07-16
 
 ### Added

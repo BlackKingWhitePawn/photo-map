@@ -99,7 +99,7 @@ class PhotoClusterBuilder {
         val clusters = mutableListOf<StoredPhotoCluster>()
         val links = mutableListOf<PhotoClusterLink>()
         val densityCoefficient = settings.densityCoefficientPercent.coerceIn(80, 320) / 100.0
-        val maxDiameterKm = settings.maxDistanceKm.toDouble().coerceIn(5.0, 50.0)
+        val maxDiameterKm = maxDiameterKmForLevel(level, densityCoefficient)
         points.groupBy { point -> point.geoCell(level) }
             .toSortedMap(compareBy<GeoCell> { cell -> cell.key })
             .forEach { (cell, cellPoints) ->
@@ -194,7 +194,7 @@ class PhotoClusterBuilder {
             thirdNeighborDistanceKm <= 1.0 -> RadiusProfile(minKm = 0.1, maxKm = 1.0)
             thirdNeighborDistanceKm <= 5.0 -> RadiusProfile(minKm = 0.5, maxKm = 5.0)
             thirdNeighborDistanceKm <= 20.0 -> RadiusProfile(minKm = 2.0, maxKm = 20.0)
-            else -> RadiusProfile(minKm = 5.0, maxKm = 50.0)
+            else -> RadiusProfile(minKm = 5.0, maxKm = maxDiameterKm)
         }
         return (thirdNeighborDistanceKm * densityCoefficient)
             .coerceIn(profile.minKm, minOf(profile.maxKm, maxDiameterKm))
@@ -214,6 +214,18 @@ private data class RadiusProfile(
     val minKm: Double,
     val maxKm: Double
 )
+
+private fun maxDiameterKmForLevel(level: Int, densityCoefficient: Double): Double {
+    val representativeZoom = when (level) {
+        4 -> 4.0
+        5 -> 7.0
+        6 -> 10.0
+        7 -> 13.0
+        9 -> 16.0
+        else -> level.toDouble().coerceAtLeast(1.0)
+    }
+    return (representativeZoom * densityCoefficient).coerceAtLeast(0.5)
+}
 
 private fun ClusterPoint.geoCell(level: Int): GeoCell {
     val latitudeSize = latitudeCellSizeDegrees(level)

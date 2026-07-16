@@ -144,15 +144,23 @@ Keystore хранить отдельно от репозитория и дела
 
 ## Release notes
 
-Для каждого релиза подготовить краткое описание:
+Для каждого релиза `release-notes/v<version>.md` использовать только такой порядок и набор секций:
 
-* версия;
-* дата релиза;
-* список добавленных возможностей;
-* список исправлений;
-* известные ограничения;
-* команды и результат проверок;
-* миграции или действия пользователя, если они требуются.
+```text
+# Photo Map v<version>
+
+Date: YYYY-MM-DD
+
+## Added
+
+## Changed
+
+## Fixed
+
+## Version
+```
+
+APK metadata, package name, `versionCode`, `versionName`, min SDK, target SDK, permission list, APK path, size, SHA-256 и signature status записывать внутри секции `Version`, без отдельных секций `Checks`, `APK`, `Permissions` или `Known Limitations`.
 
 `CHANGELOG.md` должен хранить краткую историю изменений по версиям. Release notes для GitHub Release можно готовить на основе соответствующего раздела `CHANGELOG.md`.
 

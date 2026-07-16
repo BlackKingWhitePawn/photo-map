@@ -24,9 +24,11 @@ Not included:
 
 ## Checks
 
+* Release APK prepared: `app/release/photomap-v0.7.0.apk`.
+* APK metadata inspected with `aapt2 dump badging`: `versionCode=9`, `versionName=0.7.0`.
+* APK permissions inspected with `aapt2 dump permissions`.
+* APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
 * Build and test commands were not run by Codex for this release prep, per the local project rule.
-* Release APK was not prepared by Codex.
-* APK metadata, permissions, and signature were not inspected by Codex for this release prep.
 
 ## Safety
 
@@ -49,4 +51,16 @@ Release notes:
 
 ```text
 release-notes/v0.7.0.md
+```
+
+APK asset:
+
+```text
+app/release/photomap-v0.7.0.apk
+```
+
+SHA-256:
+
+```text
+54EB63B5153BE2A0B9A15A5A5D7C9434EFB29C34749A2C6701E60168630CC4A7
 ```

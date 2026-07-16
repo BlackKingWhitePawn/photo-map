@@ -470,7 +470,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun readMapDebugPanelVisible(): Boolean {
-        return settings.getBoolean(MapDebugPanelKey, true)
+        return settings.getBoolean(MapDebugPanelKey, false)
     }
 
     private fun readClusterSettings(): PhotoClusterSettings {

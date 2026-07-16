@@ -316,7 +316,7 @@ private fun PermissionSummaryCard(
                     onClick = onOpenAppSettings
                 ) {
                     Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_preferences),
+                        painter = painterResource(id = android.R.drawable.ic_menu_manage),
                         contentDescription = null,
                         modifier = Modifier.padding(end = 8.dp)
                     )

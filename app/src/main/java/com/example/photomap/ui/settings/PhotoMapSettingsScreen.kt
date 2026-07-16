@@ -83,12 +83,6 @@ fun PhotoMapSettingsScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onBack) {
-                    Text(text = "Назад")
-                }
-            }
-
             Text(
                 text = "Настройки",
                 style = MaterialTheme.typography.headlineMedium,

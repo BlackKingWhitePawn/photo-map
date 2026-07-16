@@ -17,6 +17,11 @@ import android.text.format.DateFormat
 import android.util.Log
 import android.util.Size
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -32,10 +37,18 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -190,13 +203,18 @@ private fun MapTopBar(
     onCenterMap: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
-    Card(
+    Surface(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(12.dp)
+            .fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shadowElevation = 3.dp
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -217,20 +235,28 @@ private fun MapTopBar(
                         painter = painterResource(id = android.R.drawable.ic_menu_mylocation),
                         contentDescription = "GPS",
                         modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(onClick = onOpenSettings) {
+                    IconButton(
+                        modifier = Modifier.size(40.dp),
+                        onClick = onOpenSettings
+                    ) {
                         Icon(
-                            painter = painterResource(id = android.R.drawable.ic_menu_preferences),
-                            contentDescription = "Настройки"
+                            painter = painterResource(id = android.R.drawable.ic_menu_manage),
+                            contentDescription = "Настройки",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
-                    IconButton(onClick = onCenterMap) {
+                    IconButton(
+                        modifier = Modifier.size(40.dp),
+                        onClick = onCenterMap
+                    ) {
                         Icon(
                             painter = painterResource(id = android.R.drawable.ic_menu_mylocation),
-                            contentDescription = "Центрировать карту"
+                            contentDescription = "Центрировать карту",
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
@@ -353,6 +379,7 @@ private fun PhotoMapLibreMap(
                             renderState = latestMapRenderState.value,
                             photosById = latestPhotosById.value,
                             clusterSettings = latestClusterSettings.value,
+                            forceShowClusterGallery = bottomGalleryState != null,
                             onShowPhotos = { state -> bottomGalleryState = state }
                         )
                     }.onFailure { error ->
@@ -414,6 +441,7 @@ private fun PhotoMapLibreMap(
 
         val renderState = mapLibreMap.buildPhotoMapRenderState(
             mapItems = mapItems,
+            photosById = photosById,
             width = mapView.width,
             height = mapView.height,
             settings = clusterSettings
@@ -532,6 +560,7 @@ private fun PhotoMapLibreMap(
 
         mapRenderState = mapLibreMap.buildPhotoMapRenderState(
             mapItems = mapItems,
+            photosById = photosById,
             width = mapView.width,
             height = mapView.height,
             settings = clusterSettings
@@ -584,6 +613,7 @@ private fun PhotoMapLibreMap(
                     renderItem = item,
                     photosById = latestPhotosById.value,
                     clusterSettings = latestClusterSettings.value,
+                    forceShowClusterGallery = bottomGalleryState != null,
                     onShowPhotos = { state -> bottomGalleryState = state }
                 ) ?: false
             }
@@ -601,34 +631,21 @@ private fun PhotoMapLibreMap(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             bottomGalleryState?.let { state ->
                 BottomPhotoGallery(
                     state = state,
-                    onLoadMore = {
-                        val nextState = state.loadNextPage(
-                            photosById = latestPhotosById.value,
-                            pageSize = latestClusterSettings.value.leavesPageSize
-                        )
-                        if (nextState != null) {
-                            bottomGalleryState = nextState
-                        }
-                    },
                     onOpenPhoto = { photo -> context.openPhotoInDefaultGallery(photo) },
-                    onZoomToTarget = { target ->
-                        map?.animateCamera(
-                            CameraUpdateFactory.newLatLngZoom(
-                                LatLng(target.latitude, target.longitude),
-                                target.zoom
-                            )
-                        )
-                    },
                     onClose = { bottomGalleryState = null }
                 )
             }
-            ClusterDensitySlider(
+            ClusterDensityFabControl(
+                modifier = Modifier.fillMaxWidth(),
                 clusterSettings = clusterSettings,
                 onDensityChanged = onClusterDensityChanged
             )
@@ -869,9 +886,7 @@ private fun ClusterDebugPanel(
 @Composable
 private fun BottomPhotoGallery(
     state: BottomGalleryState,
-    onLoadMore: () -> Unit,
     onOpenPhoto: (DevicePhoto) -> Unit,
-    onZoomToTarget: (BottomGalleryZoomTarget) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -890,18 +905,15 @@ private fun BottomPhotoGallery(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    state.zoomTarget?.let { target ->
-                        IconButton(onClick = { onZoomToTarget(target) }) {
-                            Icon(
-                                painter = painterResource(id = android.R.drawable.ic_menu_zoom),
-                                contentDescription = "Приблизить"
-                            )
-                        }
-                    }
-                    OutlinedButton(onClick = onClose) {
-                        Text(text = "Закрыть")
-                    }
+                IconButton(
+                    modifier = Modifier.size(40.dp),
+                    onClick = onClose
+                ) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel),
+                        contentDescription = "Закрыть",
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
             LazyRow(
@@ -935,11 +947,59 @@ private fun BottomPhotoGallery(
                 }
             }
 
-            if (state.canLoadMore) {
-                OutlinedButton(onClick = onLoadMore) {
-                    Text(text = "Показать ещё")
+        }
+    }
+}
+
+@Composable
+private fun ClusterDensityFabControl(
+    clusterSettings: PhotoClusterSettings,
+    onDensityChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        AnimatedVisibility(
+            visible = !isExpanded,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            FloatingActionButton(onClick = { isExpanded = true }) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
+                        contentDescription = "Плотность кластеров",
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "${clusterSettings.densityCoefficientPercent}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium
+                    )
                 }
             }
+        }
+        AnimatedVisibility(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxWidth(),
+            visible = isExpanded,
+            enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
+            exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut()
+        ) {
+            ClusterDensitySlider(
+                modifier = Modifier.fillMaxWidth(),
+                clusterSettings = clusterSettings,
+                onDensityChanged = onDensityChanged,
+                onClose = { isExpanded = false }
+            )
         }
     }
 }
@@ -948,6 +1008,7 @@ private fun BottomPhotoGallery(
 private fun ClusterDensitySlider(
     clusterSettings: PhotoClusterSettings,
     onDensityChanged: (Int) -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var sliderValue by remember {
@@ -960,7 +1021,6 @@ private fun ClusterDensitySlider(
         sliderValue = clusterSettings.densityCoefficientPercent.toFloat()
         lastSentValue = clusterSettings.densityCoefficientPercent
     }
-    val steppedValue = sliderValue.roundToDensityStep()
     val densityRangeStart = MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT.toFloat()
     val densityRangeEnd = MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT.toFloat()
     val densityRange = densityRangeStart..densityRangeEnd
@@ -969,28 +1029,16 @@ private fun ClusterDensitySlider(
             PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
         ).coerceAtLeast(1) - 1
 
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+    Card(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Плотность",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "$steppedValue%",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
             Slider(
+                modifier = Modifier.weight(1f),
                 value = sliderValue.coerceIn(densityRangeStart, densityRangeEnd),
                 onValueChange = { value ->
                     sliderValue = value
@@ -1010,6 +1058,16 @@ private fun ClusterDensitySlider(
                 valueRange = densityRange,
                 steps = sliderSteps
             )
+            IconButton(
+                modifier = Modifier.size(40.dp),
+                onClick = onClose
+            ) {
+                Icon(
+                    painter = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel),
+                    contentDescription = "Скрыть плотность",
+                    modifier = Modifier.size(22.dp)
+                )
+            }
         }
     }
 }
@@ -1090,6 +1148,7 @@ private fun MapLibreMap.handlePhotoMapClick(
     renderState: PhotoMapRenderState,
     photosById: Map<Long, DevicePhoto>,
     clusterSettings: PhotoClusterSettings,
+    forceShowClusterGallery: Boolean,
     onShowPhotos: (BottomGalleryState) -> Unit
 ): Boolean {
     val screenPoint = projection.toScreenLocation(point)
@@ -1113,6 +1172,7 @@ private fun MapLibreMap.handlePhotoMapClick(
             renderItem = renderItem,
             photosById = photosById,
             clusterSettings = clusterSettings,
+            forceShowClusterGallery = forceShowClusterGallery,
             onShowPhotos = onShowPhotos
         )
     }
@@ -1146,15 +1206,15 @@ private fun MapLibreMap.handlePhotoMapRenderItemTap(
     renderItem: PhotoMapRenderItem,
     photosById: Map<Long, DevicePhoto>,
     clusterSettings: PhotoClusterSettings,
+    forceShowClusterGallery: Boolean,
     onShowPhotos: (BottomGalleryState) -> Unit
 ): Boolean {
     if (renderItem.isCluster) {
         val nextZoom = (cameraPosition.zoom + ClusterTapZoomStep).coerceAtMost(ClusterTapMaxZoom)
-        if (renderItem.photoCount >= LargeClusterGalleryThreshold) {
+        if (forceShowClusterGallery || renderItem.photoCount >= LargeClusterGalleryThreshold) {
             bottomGalleryStateForRenderItem(
                 renderItem = renderItem,
                 photosById = photosById,
-                pageSize = clusterSettings.leavesPageSize,
                 zoomTarget = BottomGalleryZoomTarget(
                     latitude = renderItem.latitude,
                     longitude = renderItem.longitude,
@@ -1211,7 +1271,6 @@ private fun handlePhotoMapPhotoIdsTap(
             val state = bottomGalleryStateForPhotoIds(
                 photoIds = action.photoIds,
                 photosById = photosById,
-                pageSize = clusterSettings.leavesPageSize,
                 zoomTarget = null
             )
             if (state != null) {
@@ -1281,29 +1340,9 @@ private fun markerOffset(
     )
 }
 
-private fun BottomGalleryState.loadNextPage(
-    photosById: Map<Long, DevicePhoto>,
-    pageSize: Int
-): BottomGalleryState? {
-    if (!canLoadMore) {
-        return null
-    }
-
-    val nextPhotos = allPhotoIds
-        .drop(photos.size)
-        .take(pageSize.coerceAtLeast(1))
-        .mapNotNull { photoId -> photosById[photoId] }
-    if (nextPhotos.isEmpty()) {
-        return copy(totalCount = photos.size)
-    }
-
-    return copy(photos = (photos + nextPhotos).distinctBy { photo -> photo.mediaId })
-}
-
 private fun bottomGalleryStateForPhotoIds(
     photoIds: List<Long>,
     photosById: Map<Long, DevicePhoto>,
-    pageSize: Int,
     zoomTarget: BottomGalleryZoomTarget?
 ): BottomGalleryState? {
     val availablePhotoIds = photoIds.distinct().filter { photoId -> photosById.containsKey(photoId) }
@@ -1313,7 +1352,6 @@ private fun bottomGalleryStateForPhotoIds(
 
     return BottomGalleryState(
         photos = availablePhotoIds
-            .take(pageSize.coerceAtLeast(1))
             .mapNotNull { photoId -> photosById[photoId] },
         totalCount = availablePhotoIds.size,
         allPhotoIds = availablePhotoIds,
@@ -1324,13 +1362,11 @@ private fun bottomGalleryStateForPhotoIds(
 private fun bottomGalleryStateForRenderItem(
     renderItem: PhotoMapRenderItem,
     photosById: Map<Long, DevicePhoto>,
-    pageSize: Int,
     zoomTarget: BottomGalleryZoomTarget?
 ): BottomGalleryState? {
     return bottomGalleryStateForPhotoIds(
         photoIds = renderItem.galleryPhotoIds(photosById),
         photosById = photosById,
-        pageSize = pageSize,
         zoomTarget = zoomTarget
     )
 }
@@ -1355,6 +1391,7 @@ private fun PhotoMapRenderItem.galleryPhotoIds(
 
 private fun MapLibreMap.buildPhotoMapRenderState(
     mapItems: List<VisiblePhotoMapItem>,
+    photosById: Map<Long, DevicePhoto>,
     width: Int,
     height: Int,
     settings: PhotoClusterSettings
@@ -1371,41 +1408,45 @@ private fun MapLibreMap.buildPhotoMapRenderState(
         val minY = -padding
         val maxX = width + padding
         val maxY = height + padding
-        val projectedItems = mapItems.asSequence()
-            .mapNotNull { item ->
-                val screenPoint = projection.toScreenLocation(LatLng(item.latitude, item.longitude))
-                if (screenPoint.x !in minX..maxX || screenPoint.y !in minY..maxY) {
-                    return@mapNotNull null
-                }
-
-                val dx = screenPoint.x - centerX
-                val dy = screenPoint.y - centerY
-                PhotoMapRenderItem(
-                    id = item.id,
-                    level = item.level,
-                    latitude = item.latitude,
-                    longitude = item.longitude,
-                    photoCount = item.photoCount,
-                    priorityScore = item.priorityScore,
-                    minLatitude = item.minLatitude,
-                    maxLatitude = item.maxLatitude,
-                    minLongitude = item.minLongitude,
-                    maxLongitude = item.maxLongitude,
-                    coverPhotoId = item.coverPhotoId,
-                    screenX = screenPoint.x,
-                    screenY = screenPoint.y,
-                    photoIds = item.photoIds,
-                    distanceFromCenter = dx * dx + dy * dy
-                )
-            }
-            .sortedBy { candidate -> candidate.distanceFromCenter }
-            .toList()
         val effectiveClusterRadiusPx = effectiveClusterRadiusPx(
             width = width,
             height = height,
             zoom = cameraPosition.zoom,
             settings = settings
         )
+        val projectedPhotos = projectVisibleMapPhotos(
+            mapItems = mapItems,
+            photosById = photosById,
+            minX = minX,
+            minY = minY,
+            maxX = maxX,
+            maxY = maxY,
+            centerX = centerX,
+            centerY = centerY
+        )
+        val projectedItems = if (projectedPhotos.isNotEmpty()) {
+            clusterProjectedPhotos(
+                projectedPhotos = projectedPhotos,
+                radiusPx = effectiveClusterRadiusPx,
+                minPoints = settings.minPoints.coerceAtLeast(2),
+                maxDistanceKm = clusterMaxDistanceKm(
+                    zoom = cameraPosition.zoom,
+                    settings = settings
+                )
+            )
+                .map { item -> item.withDistanceFromCenter(centerX, centerY) }
+                .sortedBy { item -> item.distanceFromCenter }
+        } else {
+            projectVisibleMapItems(
+                mapItems = mapItems,
+                minX = minX,
+                minY = minY,
+                maxX = maxX,
+                maxY = maxY,
+                centerX = centerX,
+                centerY = centerY
+            )
+        }
         val clusterFeatures = projectedItems
             .filter { item -> item.isCluster }
             .map { item -> item.toClusterFeature() }
@@ -1439,6 +1480,109 @@ private fun MapLibreMap.buildPhotoMapRenderState(
     }.onFailure { error ->
         Log.w(PhotoMapLogTag, "Failed to build photo map render state", error)
     }.getOrDefault(PhotoMapRenderState.Empty)
+}
+
+private fun MapLibreMap.projectVisibleMapPhotos(
+    mapItems: List<VisiblePhotoMapItem>,
+    photosById: Map<Long, DevicePhoto>,
+    minX: Float,
+    minY: Float,
+    maxX: Float,
+    maxY: Float,
+    centerX: Float,
+    centerY: Float
+): List<ProjectedMapPhoto> {
+    val projectedByPhotoId = LinkedHashMap<Long, ProjectedMapPhoto>()
+    mapItems.forEach { item ->
+        val photoIds = when {
+            item.photoIds.isNotEmpty() -> item.photoIds
+            item.photoCount <= 1 -> item.coverPhotoId?.let(::listOf).orEmpty()
+            else -> emptyList()
+        }
+        photoIds.forEach { photoId ->
+            if (projectedByPhotoId.containsKey(photoId)) {
+                return@forEach
+            }
+            val photo = photosById[photoId] ?: return@forEach
+            val projectedPhoto = projectVisiblePhoto(
+                photo = photo,
+                minX = minX,
+                minY = minY,
+                maxX = maxX,
+                maxY = maxY,
+                centerX = centerX,
+                centerY = centerY
+            ) ?: return@forEach
+            projectedByPhotoId[photoId] = projectedPhoto
+        }
+    }
+    return projectedByPhotoId.values.sortedBy { photo -> photo.distanceFromCenter }
+}
+
+private fun MapLibreMap.projectVisiblePhoto(
+    photo: DevicePhoto,
+    minX: Float,
+    minY: Float,
+    maxX: Float,
+    maxY: Float,
+    centerX: Float,
+    centerY: Float
+): ProjectedMapPhoto? {
+    val photoPoint = photo.toMapPoint() ?: return null
+    val screenPoint = projection.toScreenLocation(LatLng(photoPoint.latitude, photoPoint.longitude))
+    if (screenPoint.x !in minX..maxX || screenPoint.y !in minY..maxY) {
+        return null
+    }
+
+    val dx = screenPoint.x - centerX
+    val dy = screenPoint.y - centerY
+    return ProjectedMapPhoto(
+        photo = photo,
+        point = photoPoint,
+        screenX = screenPoint.x,
+        screenY = screenPoint.y,
+        distanceFromCenter = dx * dx + dy * dy
+    )
+}
+
+private fun MapLibreMap.projectVisibleMapItems(
+    mapItems: List<VisiblePhotoMapItem>,
+    minX: Float,
+    minY: Float,
+    maxX: Float,
+    maxY: Float,
+    centerX: Float,
+    centerY: Float
+): List<PhotoMapRenderItem> {
+    return mapItems.asSequence()
+        .mapNotNull { item ->
+            val screenPoint = projection.toScreenLocation(LatLng(item.latitude, item.longitude))
+            if (screenPoint.x !in minX..maxX || screenPoint.y !in minY..maxY) {
+                return@mapNotNull null
+            }
+
+            val dx = screenPoint.x - centerX
+            val dy = screenPoint.y - centerY
+            PhotoMapRenderItem(
+                id = item.id,
+                level = item.level,
+                latitude = item.latitude,
+                longitude = item.longitude,
+                photoCount = item.photoCount,
+                priorityScore = item.priorityScore,
+                minLatitude = item.minLatitude,
+                maxLatitude = item.maxLatitude,
+                minLongitude = item.minLongitude,
+                maxLongitude = item.maxLongitude,
+                coverPhotoId = item.coverPhotoId,
+                screenX = screenPoint.x,
+                screenY = screenPoint.y,
+                photoIds = item.photoIds,
+                distanceFromCenter = dx * dx + dy * dy
+            )
+        }
+        .sortedBy { item -> item.distanceFromCenter }
+        .toList()
 }
 
 private fun clusterProjectedPhotos(
@@ -1491,6 +1635,15 @@ private fun clusterProjectedPhotos(
     }
 }
 
+private fun PhotoMapRenderItem.withDistanceFromCenter(
+    centerX: Float,
+    centerY: Float
+): PhotoMapRenderItem {
+    val dx = screenX - centerX
+    val dy = screenY - centerY
+    return copy(distanceFromCenter = dx * dx + dy * dy)
+}
+
 private fun effectiveClusterRadiusPx(
     width: Int,
     height: Int,
@@ -1506,8 +1659,17 @@ private fun effectiveClusterRadiusPx(
         zoom <= NeighborhoodClusterZoom -> viewportMinSide * 0.32f
         else -> baseRadius
     }
-    return max(baseRadius, viewportRadius)
+    val densityScale = settings.densityCoefficientPercent.coerceIn(80, 320) / 100f
+    return (max(baseRadius, viewportRadius) * densityScale)
         .coerceAtMost(viewportMaxSide)
+}
+
+private fun clusterMaxDistanceKm(
+    zoom: Double,
+    settings: PhotoClusterSettings
+): Double {
+    val densityScale = settings.densityCoefficientPercent.coerceIn(80, 320) / 100.0
+    return (zoom.coerceAtLeast(0.1) * densityScale).coerceAtLeast(0.1)
 }
 
 private fun visibleThumbnailPhotoIds(

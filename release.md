@@ -162,6 +162,8 @@ Date: YYYY-MM-DD
 
 APK metadata, package name, `versionCode`, `versionName`, min SDK, target SDK, permission list, APK path, size, SHA-256 и signature status записывать внутри секции `Version`, без отдельных секций `Checks`, `APK`, `Permissions` или `Known Limitations`.
 
+`signer DN` в release notes, changelog, PR и другой публичной документации не записывать, чтобы не индексировать персональные данные из сертификата. Для проверки подписи достаточно статуса подписи и SHA-256 fingerprint сертификата.
+
 `CHANGELOG.md` должен хранить краткую историю изменений по версиям. Release notes для GitHub Release можно готовить на основе соответствующего раздела `CHANGELOG.md`.
 
 ## Создание релиза

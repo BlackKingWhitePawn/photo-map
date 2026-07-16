@@ -584,7 +584,15 @@ private fun PhotoMapLibreMap(
         MapMarkerOverlay(
             renderState = mapRenderState,
             photosById = photosById,
-            markerScalePercent = clusterSettings.markerScalePercent
+            markerScalePercent = clusterSettings.markerScalePercent,
+            onMarkerTap = { item ->
+                map?.handlePhotoMapRenderItemTap(
+                    renderItem = item,
+                    photosById = latestPhotosById.value,
+                    clusterSettings = latestClusterSettings.value,
+                    onShowPhotos = { state -> bottomGalleryState = state }
+                ) ?: false
+            }
         )
 
         if (showDebugPanel) {
@@ -622,7 +630,8 @@ private fun PhotoMapLibreMap(
 private fun MapMarkerOverlay(
     renderState: PhotoMapRenderState,
     photosById: Map<Long, DevicePhoto>,
-    markerScalePercent: Int
+    markerScalePercent: Int,
+    onMarkerTap: (PhotoMapRenderItem) -> Boolean
 ) {
     val density = LocalDensity.current
     val clusterSize = (44f * markerScalePercent.coerceIn(80, 200) / 100f).dp
@@ -649,6 +658,7 @@ private fun MapMarkerOverlay(
                     item = item,
                     photo = representativePhoto,
                     sizePx = clusterSizePx,
+                    onClick = { onMarkerTap(item) },
                     modifier = Modifier
                         .offset {
                             markerOffset(
@@ -667,6 +677,7 @@ private fun MapMarkerOverlay(
                 if (photo != null) {
                     MapPhotoMarker(
                         photo = photo,
+                        onClick = { onMarkerTap(item) },
                         modifier = Modifier
                             .offset {
                                 markerOffset(
@@ -688,6 +699,7 @@ private fun MapClusterMarker(
     item: PhotoMapRenderItem,
     photo: DevicePhoto?,
     sizePx: Float,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -705,15 +717,15 @@ private fun MapClusterMarker(
             }
         }
     }
-    Surface(
-        modifier = modifier,
-        shape = CircleShape,
-        color = colorScheme.primary,
-        contentColor = colorScheme.onPrimary,
-        border = BorderStroke(2.dp, colorScheme.surface),
-        shadowElevation = 4.dp
-    ) {
-        Box(contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.clickable(onClick = onClick)) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = CircleShape,
+            color = colorScheme.primary,
+            contentColor = colorScheme.onPrimary,
+            border = BorderStroke(2.dp, colorScheme.surface),
+            shadowElevation = 4.dp
+        ) {
             if (thumbnail != null) {
                 Image(
                     bitmap = requireNotNull(thumbnail).asImageBitmap(),
@@ -722,30 +734,49 @@ private fun MapClusterMarker(
                     modifier = Modifier.fillMaxSize()
                 )
             }
-            Surface(
-                shape = CircleShape,
-                color = colorScheme.primary.copy(alpha = if (thumbnail == null) 1f else 0.88f),
-                contentColor = colorScheme.onPrimary,
-                border = BorderStroke(1.dp, colorScheme.surface)
-            ) {
-                Text(
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
-                    text = item.photoCount.clusterCountLabel(),
-                    style = if (sizePx >= 52f) {
-                        MaterialTheme.typography.labelLarge
-                    } else {
-                        MaterialTheme.typography.labelMedium
-                    },
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
         }
+        ClusterCountBadge(
+            label = item.photoCount.clusterCountLabel(),
+            sizePx = sizePx,
+            modifier = if (thumbnail == null) {
+                Modifier.align(Alignment.Center)
+            } else {
+                Modifier.align(Alignment.BottomEnd)
+            }
+        )
+    }
+}
+
+@Composable
+private fun ClusterCountBadge(
+    label: String,
+    sizePx: Float,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.surface)
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            text = label,
+            style = if (sizePx >= 52f) {
+                MaterialTheme.typography.labelLarge
+            } else {
+                MaterialTheme.typography.labelMedium
+            },
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
 @Composable
 private fun MapPhotoMarker(
     photo: DevicePhoto,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -759,7 +790,7 @@ private fun MapPhotoMarker(
         }
     }
     Surface(
-        modifier = modifier,
+        modifier = modifier.clickable(onClick = onClick),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primary,
         border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface),
@@ -968,7 +999,26 @@ private fun MapLibreMap.handlePhotoMapClick(
         screenY = screenPoint.y,
         settings = clusterSettings
     )
-    val photoIds = renderItem?.tappablePhotoIds ?: photoIdsNearTap(
+    if (renderItem != null) {
+        Log.d(
+            PhotoMapLogTag,
+            "Photo projection hit-test: photoIds=${renderItem.tappablePhotoIds.distinct().size}, " +
+                "renderHit=${renderItem.id}, isCluster=${renderItem.isCluster}"
+        )
+        AppDiagnostics.record(
+            PhotoMapLogTag,
+            "Photo projection hit-test: photoIds=${renderItem.tappablePhotoIds.distinct().size}, " +
+                "renderHit=${renderItem.id}, isCluster=${renderItem.isCluster}"
+        )
+        return handlePhotoMapRenderItemTap(
+            renderItem = renderItem,
+            photosById = photosById,
+            clusterSettings = clusterSettings,
+            onShowPhotos = onShowPhotos
+        )
+    }
+
+    val photoIds = photoIdsNearTap(
         point = point,
         photos = photosById.values,
         hitSlopPx = MapTapHitSlopPx,
@@ -977,15 +1027,29 @@ private fun MapLibreMap.handlePhotoMapClick(
     Log.d(
         PhotoMapLogTag,
         "Photo projection hit-test: photoIds=${photoIds.distinct().size}, " +
-            "renderHit=${renderItem?.id}, isCluster=${renderItem?.isCluster}"
+            "renderHit=null, isCluster=null"
     )
     AppDiagnostics.record(
         PhotoMapLogTag,
         "Photo projection hit-test: photoIds=${photoIds.distinct().size}, " +
-            "renderHit=${renderItem?.id}, isCluster=${renderItem?.isCluster}"
+            "renderHit=null, isCluster=null"
     )
 
-    if (renderItem?.isCluster == true) {
+    return handlePhotoMapPhotoIdsTap(
+        photoIds = photoIds,
+        photosById = photosById,
+        clusterSettings = clusterSettings,
+        onShowPhotos = onShowPhotos
+    )
+}
+
+private fun MapLibreMap.handlePhotoMapRenderItemTap(
+    renderItem: PhotoMapRenderItem,
+    photosById: Map<Long, DevicePhoto>,
+    clusterSettings: PhotoClusterSettings,
+    onShowPhotos: (BottomGalleryState) -> Unit
+): Boolean {
+    if (renderItem.isCluster) {
         val nextZoom = (cameraPosition.zoom + ClusterTapZoomStep).coerceAtMost(ClusterTapMaxZoom)
         animateCamera(
             CameraUpdateFactory.newLatLngZoom(
@@ -1000,6 +1064,20 @@ private fun MapLibreMap.handlePhotoMapClick(
         return true
     }
 
+    return handlePhotoMapPhotoIdsTap(
+        photoIds = renderItem.tappablePhotoIds,
+        photosById = photosById,
+        clusterSettings = clusterSettings,
+        onShowPhotos = onShowPhotos
+    )
+}
+
+private fun handlePhotoMapPhotoIdsTap(
+    photoIds: List<Long>,
+    photosById: Map<Long, DevicePhoto>,
+    clusterSettings: PhotoClusterSettings,
+    onShowPhotos: (BottomGalleryState) -> Unit
+): Boolean {
     return when (val action = PhotoMapClickDecision.forUnclustered(photoIds)) {
         PhotoMapTapAction.NoAction,
         is PhotoMapTapAction.ZoomToCluster,

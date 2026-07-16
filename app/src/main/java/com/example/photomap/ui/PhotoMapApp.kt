@@ -50,6 +50,7 @@ fun PhotoMapApp(
             mapItems = state.visibleMapItems,
             mapStyleUrl = BuildConfig.MAP_STYLE_URL,
             clusterSettings = state.clusterSettings,
+            showDebugPanel = state.showMapDebugPanel,
             isScanning = state.isLoading,
             isScanPaused = state.isScanPaused,
             scanProcessed = state.scanProcessed,
@@ -88,7 +89,8 @@ fun PhotoMapApp(
             onDecreaseMaxVisibleThumbnails = viewModel::decreaseMaxVisibleThumbnails,
             onIncreaseMaxVisibleThumbnails = viewModel::increaseMaxVisibleThumbnails,
             onDecreaseThumbnailPreloadPadding = viewModel::decreaseThumbnailPreloadPadding,
-            onIncreaseThumbnailPreloadPadding = viewModel::increaseThumbnailPreloadPadding
+            onIncreaseThumbnailPreloadPadding = viewModel::increaseThumbnailPreloadPadding,
+            onSetMapDebugPanelVisible = viewModel::setMapDebugPanelVisible
         )
     }
 }

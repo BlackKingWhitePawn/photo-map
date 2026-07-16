@@ -24,6 +24,7 @@ data class PhotoAccessUiState(
     val scanProcessed: Int = 0,
     val scanTotal: Int = 0,
     val clusterSettings: PhotoClusterSettings = PhotoClusterSettings(),
+    val showMapDebugPanel: Boolean = true,
     val hasRequestedPermissions: Boolean = false,
     val errorMessage: String? = null
 )

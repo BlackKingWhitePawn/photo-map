@@ -70,7 +70,8 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState = MutableStateFlow(
         PhotoAccessUiState(
             permissionStatus = PhotoPermissionManager.checkStatus(application),
-            clusterSettings = readClusterSettings()
+            clusterSettings = readClusterSettings(),
+            showMapDebugPanel = readMapDebugPanelVisible()
         )
     )
     val uiState: StateFlow<PhotoAccessUiState> = _uiState
@@ -343,6 +344,15 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun setMapDebugPanelVisible(isVisible: Boolean) {
+        settings.edit()
+            .putBoolean(MapDebugPanelKey, isVisible)
+            .apply()
+        _uiState.update { state ->
+            state.copy(showMapDebugPanel = isVisible)
+        }
+    }
+
     fun onMapViewportChanged(bounds: PhotoMapBounds, zoom: Double) {
         lastViewportBounds = bounds
         lastViewportZoom = zoom
@@ -448,6 +458,11 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         const val ThumbnailCellSizePxKey = "thumbnail_cell_size_px"
         const val MaxVisibleThumbnailsKey = "max_visible_thumbnails"
         const val ThumbnailPreloadPaddingPxKey = "thumbnail_preload_padding_px"
+        const val MapDebugPanelKey = "map_debug_panel"
+    }
+
+    private fun readMapDebugPanelVisible(): Boolean {
+        return settings.getBoolean(MapDebugPanelKey, true)
     }
 
     private fun readClusterSettings(): PhotoClusterSettings {

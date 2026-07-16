@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -44,6 +45,7 @@ import com.example.photomap.core.settings.MIN_PHOTO_MAX_VISIBLE_THUMBNAILS
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_CELL_SIZE_PX
 import com.example.photomap.core.settings.MIN_PHOTO_THUMBNAIL_PRELOAD_PADDING_PX
 import com.example.photomap.core.util.AppDiagnostics
+import com.example.photomap.ui.map.mapDebugPanelStateText
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 
 @Composable
@@ -72,7 +74,8 @@ fun PhotoMapSettingsScreen(
     onDecreaseMaxVisibleThumbnails: () -> Unit,
     onIncreaseMaxVisibleThumbnails: () -> Unit,
     onDecreaseThumbnailPreloadPadding: () -> Unit,
-    onIncreaseThumbnailPreloadPadding: () -> Unit
+    onIncreaseThumbnailPreloadPadding: () -> Unit,
+    onSetMapDebugPanelVisible: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -198,6 +201,32 @@ fun PhotoMapSettingsScreen(
                             Text(text = "Отмена")
                         }
                     }
+                }
+            }
+
+            SettingsCard(title = "Debug") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Debug-панель карты",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = mapDebugPanelStateText(state.showMapDebugPanel),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = state.showMapDebugPanel,
+                        onCheckedChange = onSetMapDebugPanelVisible
+                    )
                 }
             }
 
@@ -338,5 +367,6 @@ private fun PhotoAccessUiState.diagnosticHeader(): String {
         appendLine("Thumbnail cell size px: ${settings.thumbnailCellSizePx}")
         appendLine("Max visible thumbnails: ${settings.maxVisibleThumbnails}")
         appendLine("Thumbnail preload padding px: ${settings.thumbnailPreloadPaddingPx}")
+        appendLine("Map debug panel: $showMapDebugPanel")
     }
 }

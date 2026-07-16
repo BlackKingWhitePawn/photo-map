@@ -18,17 +18,23 @@ import android.util.Log
 import android.util.Size
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
@@ -40,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -51,9 +58,11 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -93,6 +102,7 @@ fun PhotoMapScreen(
     mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
+    showDebugPanel: Boolean,
     isScanning: Boolean,
     isScanPaused: Boolean,
     scanProcessed: Int,
@@ -143,6 +153,7 @@ fun PhotoMapScreen(
                         mapItems = mapItems,
                         mapStyleUrl = mapStyleUrl,
                         clusterSettings = normalizedClusterSettings,
+                        showDebugPanel = showDebugPanel,
                         centerRequestKey = centerRequestKey,
                         onViewportChanged = onViewportChanged
                     )
@@ -286,6 +297,7 @@ private fun PhotoMapLibreMap(
     mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
+    showDebugPanel: Boolean,
     centerRequestKey: Int,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
@@ -308,6 +320,7 @@ private fun PhotoMapLibreMap(
     var isStyleReady by remember { mutableStateOf(false) }
     var styleGeneration by remember { mutableStateOf(0) }
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
+    var cameraMoveRevision by remember { mutableStateOf(0) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
     var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
@@ -332,6 +345,9 @@ private fun PhotoMapLibreMap(
                 AppDiagnostics.record(PhotoMapLogTag, "Map is ready")
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
+                mapLibreMap.addOnCameraMoveListener {
+                    cameraMoveRevision += 1
+                }
                 mapLibreMap.addOnCameraIdleListener {
                     thumbnailRefreshKey += 1
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
@@ -507,6 +523,27 @@ private fun PhotoMapLibreMap(
         }
     }
 
+    LaunchedEffect(
+        map,
+        isStyleReady,
+        styleGeneration,
+        cameraMoveRevision,
+        mapItems,
+        clusterSettings
+    ) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady || mapView.width <= 0 || mapView.height <= 0) {
+            return@LaunchedEffect
+        }
+
+        mapRenderState = mapLibreMap.buildPhotoMapRenderState(
+            mapItems = mapItems,
+            width = mapView.width,
+            height = mapView.height,
+            settings = clusterSettings
+        )
+    }
+
     LaunchedEffect(map, isStyleReady, cameraPositions) {
         val mapLibreMap = map ?: return@LaunchedEffect
         if (!isStyleReady || hasFitCamera || cameraPositions.isEmpty()) {
@@ -544,6 +581,21 @@ private fun PhotoMapLibreMap(
             factory = { mapView }
         )
 
+        MapMarkerOverlay(
+            renderState = mapRenderState,
+            photosById = photosById,
+            markerScalePercent = clusterSettings.markerScalePercent
+        )
+
+        if (showDebugPanel) {
+            ClusterDebugPanel(
+                renderState = mapRenderState,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+            )
+        }
+
         bottomGalleryState?.let { state ->
             BottomPhotoGallery(
                 state = state,
@@ -562,6 +614,205 @@ private fun PhotoMapLibreMap(
                     .align(Alignment.BottomCenter)
                     .padding(12.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun MapMarkerOverlay(
+    renderState: PhotoMapRenderState,
+    photosById: Map<Long, DevicePhoto>,
+    markerScalePercent: Int
+) {
+    val density = LocalDensity.current
+    val clusterSize = (44f * markerScalePercent.coerceIn(80, 200) / 100f).dp
+    val photoSize = 46.dp
+    val clusterSizePx = with(density) { clusterSize.toPx() }
+    val photoSizePx = with(density) { photoSize.toPx() }
+    val thumbnailIds = remember(renderState) {
+        renderState.thumbnailPhotoIds.toSet()
+    }
+    val clusterItems = remember(renderState) {
+        renderState.items.filter { item -> item.isCluster }
+    }
+    val photoItems = remember(renderState, thumbnailIds) {
+        renderState.items.filter { item ->
+            !item.isCluster && item.representativePhotoId?.let { photoId -> photoId in thumbnailIds } == true
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        clusterItems.forEach { item ->
+            key(item.id) {
+                val representativePhoto = item.representativePhotoId?.let { photoId -> photosById[photoId] }
+                MapClusterMarker(
+                    item = item,
+                    photo = representativePhoto,
+                    sizePx = clusterSizePx,
+                    modifier = Modifier
+                        .offset {
+                            markerOffset(
+                                screenX = item.screenX,
+                                screenY = item.screenY,
+                                markerSizePx = clusterSizePx
+                            )
+                        }
+                        .size(clusterSize)
+                )
+            }
+        }
+        photoItems.forEach { item ->
+            key(item.id) {
+                val photo = item.representativePhotoId?.let { photoId -> photosById[photoId] }
+                if (photo != null) {
+                    MapPhotoMarker(
+                        photo = photo,
+                        modifier = Modifier
+                            .offset {
+                                markerOffset(
+                                    screenX = item.screenX,
+                                    screenY = item.screenY,
+                                    markerSizePx = photoSizePx
+                                )
+                            }
+                            .size(photoSize)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapClusterMarker(
+    item: PhotoMapRenderItem,
+    photo: DevicePhoto?,
+    sizePx: Float,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val thumbnail by produceState<Bitmap?>(initialValue = null, photo?.uri) {
+        value = if (photo == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                context.loadPhotoPreviewBitmap(
+                    uriString = photo.uri,
+                    targetSizePx = MapOverlayThumbnailPx,
+                    photoId = photo.mediaId
+                )
+            }
+        }
+    }
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = colorScheme.primary,
+        contentColor = colorScheme.onPrimary,
+        border = BorderStroke(2.dp, colorScheme.surface),
+        shadowElevation = 4.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            if (thumbnail != null) {
+                Image(
+                    bitmap = requireNotNull(thumbnail).asImageBitmap(),
+                    contentDescription = photo?.displayName,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Surface(
+                shape = CircleShape,
+                color = colorScheme.primary.copy(alpha = if (thumbnail == null) 1f else 0.88f),
+                contentColor = colorScheme.onPrimary,
+                border = BorderStroke(1.dp, colorScheme.surface)
+            ) {
+                Text(
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                    text = item.photoCount.clusterCountLabel(),
+                    style = if (sizePx >= 52f) {
+                        MaterialTheme.typography.labelLarge
+                    } else {
+                        MaterialTheme.typography.labelMedium
+                    },
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapPhotoMarker(
+    photo: DevicePhoto,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val thumbnail by produceState<Bitmap?>(initialValue = null, photo.uri) {
+        value = withContext(Dispatchers.IO) {
+            context.loadPhotoPreviewBitmap(
+                uriString = photo.uri,
+                targetSizePx = MapOverlayThumbnailPx,
+                photoId = photo.mediaId
+            )
+        }
+    }
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primary,
+        border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface),
+        shadowElevation = 4.dp
+    ) {
+        if (thumbnail != null) {
+            Image(
+                bitmap = requireNotNull(thumbnail).asImageBitmap(),
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClusterDebugPanel(
+    renderState: PhotoMapRenderState,
+    modifier: Modifier = Modifier
+) {
+    val clusters = remember(renderState) {
+        renderState.items.filter { item -> item.isCluster }
+    }
+    val scrollState = rememberScrollState()
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth(0.82f)
+            .heightIn(max = 220.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(10.dp)
+                .verticalScroll(scrollState),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "Debug: кластеров ${clusters.size}",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            clusters.forEachIndexed { index, item ->
+                Text(
+                    text = formatClusterDebugLine(
+                        index = index,
+                        photoCount = item.photoCount,
+                        latitude = item.latitude,
+                        longitude = item.longitude
+                    ),
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 }
@@ -717,7 +968,7 @@ private fun MapLibreMap.handlePhotoMapClick(
         screenY = screenPoint.y,
         settings = clusterSettings
     )
-    val photoIds = renderItem?.photoIds ?: photoIdsNearTap(
+    val photoIds = renderItem?.tappablePhotoIds ?: photoIdsNearTap(
         point = point,
         photos = photosById.values,
         hitSlopPx = MapTapHitSlopPx,
@@ -816,6 +1067,19 @@ private fun MapLibreMap.photoIdsNearTap(
     }.getOrDefault(emptyList())
 }
 
+private fun markerOffset(
+    screenX: Float,
+    screenY: Float,
+    markerSizePx: Float
+): IntOffset {
+    val (x, y) = markerTopLeftPx(
+        screenX = screenX,
+        screenY = screenY,
+        markerSizePx = markerSizePx
+    )
+    return IntOffset(x, y)
+}
+
 private fun BottomGalleryState.loadNextPage(
     photosById: Map<Long, DevicePhoto>,
     pageSize: Int
@@ -909,7 +1173,7 @@ private fun MapLibreMap.buildPhotoMapRenderState(
         val clusterThumbnailRequests = projectedItems
             .filter { item -> item.isCluster }
             .mapNotNull { item ->
-                val representativePhotoId = item.coverPhotoId ?: item.photoIds.firstOrNull() ?: return@mapNotNull null
+                val representativePhotoId = item.representativePhotoId ?: return@mapNotNull null
                 ClusterThumbnailRequest(
                     imageKey = photoClusterThumbnailImageKey(item.id),
                     representativePhotoId = representativePhotoId,
@@ -1029,7 +1293,7 @@ private fun visibleThumbnailPhotoIds(
     return occupiedCells.values
         .asSequence()
         .take(settings.maxVisibleThumbnails.coerceAtLeast(1))
-        .mapNotNull { item -> item.photoIds.firstOrNull() }
+        .mapNotNull { item -> item.representativePhotoId }
         .toList()
 }
 
@@ -1326,7 +1590,19 @@ private data class PhotoMapRenderItem(
     val distanceFromCenter: Float = 0f
 ) {
     val isCluster: Boolean
-        get() = level > 0 || photoCount > 1
+        get() = isPhotoMapCluster(photoCount)
+
+    val representativePhotoId: Long?
+        get() = selectRepresentativePhotoId(
+            coverPhotoId = coverPhotoId,
+            photoIds = photoIds
+        )
+
+    val tappablePhotoIds: List<Long>
+        get() = selectTappablePhotoIds(
+            coverPhotoId = coverPhotoId,
+            photoIds = photoIds
+        )
 
     fun toClusterFeature(): Feature {
         return Feature.fromGeometry(Point.fromLngLat(longitude, latitude)).apply {
@@ -1569,13 +1845,19 @@ private fun MapLibreMap.dispatchViewportChanged(
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     runCatching {
-        val bounds = projection.visibleRegion.latLngBounds
+        val visibleRegion = projection.visibleRegion
+        val points = listOf(
+            visibleRegion.nearLeft,
+            visibleRegion.nearRight,
+            visibleRegion.farLeft,
+            visibleRegion.farRight
+        )
         onViewportChanged(
             PhotoMapBounds(
-                south = bounds.latSouth,
-                west = bounds.lonWest,
-                north = bounds.latNorth,
-                east = bounds.lonEast
+                south = points.minOf { point -> point!!.latitude },
+                west = points.minOf { point -> point!!.longitude },
+                north = points.maxOf { point -> point!!.latitude },
+                east = points.maxOf { point -> point!!.longitude }
             ),
             cameraPosition.zoom
         )
@@ -1646,6 +1928,7 @@ private const val MapBoundsPaddingPx = 120
 private const val InitialSinglePhotoZoom = 14.0
 private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160
+private const val MapOverlayThumbnailPx = 96
 private const val MapThumbnailWidthDp = 56f
 private const val MapThumbnailHeightDp = 56f
 private const val MapThumbnailBorderPx = 4f

@@ -141,28 +141,33 @@ private fun Style.recreatePhotoMapLayers(
         )
     )
 
-    addLayer(
-        CircleLayer(PHOTO_CLUSTER_LAYER_ID, PHOTO_MAP_SOURCE_ID)
-            .withProperties(
-                circleRadius(36f * sourceKey.markerScale),
-                circleColor(colors.clusterSmall),
-                circleOpacity(0.92f),
-                circleStrokeColor(colors.photoStroke),
-                circleStrokeWidth(3f)
-            )
-    )
+    val topBaseLayerId = layers.lastOrNull()?.id
+    val clusterLayer = CircleLayer(PHOTO_CLUSTER_LAYER_ID, PHOTO_MAP_SOURCE_ID)
+        .withProperties(
+            circleRadius(36f * sourceKey.markerScale),
+            circleColor(colors.clusterSmall),
+            circleOpacity(0.92f),
+            circleStrokeColor(colors.photoStroke),
+            circleStrokeWidth(3f)
+        )
+    if (topBaseLayerId == null) {
+        addLayer(clusterLayer)
+    } else {
+        addLayerAbove(clusterLayer, topBaseLayerId)
+    }
 
-    addLayer(
+    addLayerAbove(
         SymbolLayer(PHOTO_CLUSTER_THUMBNAIL_LAYER_ID, PHOTO_MAP_SOURCE_ID)
             .withProperties(
                 iconImage("{$PHOTO_CLUSTER_THUMBNAIL_KEY_PROPERTY}"),
                 iconSize(1.0f),
                 iconAllowOverlap(true),
                 iconIgnorePlacement(true)
-            )
+            ),
+        PHOTO_CLUSTER_LAYER_ID
     )
 
-    addLayer(
+    addLayerAbove(
         SymbolLayer(PHOTO_CLUSTER_COUNT_LAYER_ID, PHOTO_MAP_SOURCE_ID)
             .withProperties(
                 textField("{$PHOTO_CLUSTER_COUNT_ABBREVIATED_PROPERTY}"),
@@ -172,10 +177,11 @@ private fun Style.recreatePhotoMapLayers(
                 textHaloWidth(1.2f),
                 textAllowOverlap(true),
                 textIgnorePlacement(true)
-            )
+            ),
+        PHOTO_CLUSTER_THUMBNAIL_LAYER_ID
     )
 
-    addLayer(
+    addLayerAbove(
         CircleLayer(PHOTO_UNCLUSTERED_LAYER_ID, PHOTO_THUMBNAIL_SOURCE_ID)
             .withProperties(
                 circleRadius(9f),
@@ -183,17 +189,19 @@ private fun Style.recreatePhotoMapLayers(
                 circleStrokeColor(colors.photoStroke),
                 circleStrokeWidth(3f),
                 circleOpacity(0.78f)
-            )
+            ),
+        PHOTO_CLUSTER_COUNT_LAYER_ID
     )
 
-    addLayer(
+    addLayerAbove(
         SymbolLayer(PHOTO_THUMBNAIL_LAYER_ID, PHOTO_THUMBNAIL_SOURCE_ID)
             .withProperties(
                 iconImage("{$PHOTO_THUMBNAIL_KEY_PROPERTY}"),
                 iconSize(1.0f),
                 iconAllowOverlap(true),
                 iconIgnorePlacement(true)
-            )
+            ),
+        PHOTO_UNCLUSTERED_LAYER_ID
     )
 }
 

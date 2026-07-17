@@ -45,10 +45,13 @@ import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.cluster.PhotoClusterStore
 import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.cluster.clusterLevelForZoom
+import com.example.photomap.data.heatmap.TripHeatmapStore
+import com.example.photomap.data.heatmap.heatResolutionForZoom
 import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
 import com.example.photomap.data.media.PhotoReadControl
 import com.example.photomap.data.trip.TripStore
+import com.example.photomap.data.worker.TripHeatmapWorker
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.buildPhotoDateFilter
@@ -65,16 +68,21 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private val photoReader: DevicePhotoReader = AndroidMediaStorePhotoReader(application)
     private val clusterStore = PhotoClusterStore(application)
     private val tripStore = TripStore(application)
+    private val tripHeatmapStore = TripHeatmapStore(application)
     private val settings = application.getSharedPreferences(SettingsName, Context.MODE_PRIVATE)
     private val scanPauseState = MutableStateFlow(false)
     private var scanJob: Job? = null
     private var clusterRebuildJob: Job? = null
     private var visibleMapLoadJob: Job? = null
+    private var tripHeatmapLoadJob: Job? = null
     private var tripSegmentationJob: Job? = null
     private var clusterGeneration = 0L
     private var viewportLoadGeneration = 0L
+    private var tripHeatmapViewportGeneration = 0L
     private var loadedClusterBounds: PhotoMapBounds? = null
     private var loadedClusterLevel: Int? = null
+    private var loadedTripHeatBounds: PhotoMapBounds? = null
+    private var loadedTripHeatResolution: Int? = null
     private var lastViewportBounds: PhotoMapBounds? = null
     private var lastViewportZoom: Double? = null
     private var lastProgressiveClusterRefreshAt = 0L
@@ -116,6 +124,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         if (scanWhenAllowed && status.canReadImages) {
+            TripHeatmapWorker.enqueuePeriodic(getApplication())
             val shouldReadExifLocation = scanExifAfterPermissionGrant
             scanExifAfterPermissionGrant = false
             scanPhotos(readExifLocation = shouldReadExifLocation)
@@ -416,9 +425,16 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         val requestedLevel = clusterLevelForZoom(zoom)
+        val requestedHeatResolution = heatResolutionForZoom(zoom)
         val currentLoadedBounds = loadedClusterBounds
+        val currentLoadedHeatBounds = loadedTripHeatBounds
         val hasVisibleItems = uiState.value.visibleMapItems.isNotEmpty()
-        if (hasVisibleItems && loadedClusterLevel == requestedLevel && currentLoadedBounds?.contains(bounds) == true) {
+        val shouldLoadClusters = !hasVisibleItems ||
+            loadedClusterLevel != requestedLevel ||
+            currentLoadedBounds?.contains(bounds) != true
+        val shouldLoadHeatmap = loadedTripHeatResolution != requestedHeatResolution ||
+            currentLoadedHeatBounds?.contains(bounds) != true
+        if (!shouldLoadClusters && !shouldLoadHeatmap) {
             return
         }
 
@@ -428,21 +444,74 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         val viewportGeneration = viewportLoadGeneration
         visibleMapLoadJob = viewModelScope.launch {
             val stateSnapshot = uiState.value
-            val content = clusterStore.loadVisibleMapContent(
-                bounds = bounds,
-                zoom = zoom,
-                settings = stateSnapshot.clusterSettings,
-                dateFilter = stateSnapshot.dateFilter
-            )
+            val content = if (shouldLoadClusters) {
+                clusterStore.loadVisibleMapContent(
+                    bounds = bounds,
+                    zoom = zoom,
+                    settings = stateSnapshot.clusterSettings,
+                    dateFilter = stateSnapshot.dateFilter
+                )
+            } else {
+                null
+            }
+            val heatmapContent = if (shouldLoadHeatmap) {
+                tripHeatmapStore.loadVisibleHeatmap(
+                    bounds = bounds,
+                    zoom = zoom
+                )
+            } else {
+                null
+            }
             if (generation != clusterGeneration || viewportGeneration != viewportLoadGeneration) {
                 return@launch
             }
-            loadedClusterBounds = content.loadedBounds
-            loadedClusterLevel = content.level
+            content?.let { loadedContent ->
+                loadedClusterBounds = loadedContent.loadedBounds
+                loadedClusterLevel = loadedContent.level
+            }
+            heatmapContent?.let { loadedHeatmap ->
+                loadedTripHeatBounds = loadedHeatmap.loadedBounds
+                loadedTripHeatResolution = loadedHeatmap.resolution
+            }
             _uiState.update { state ->
                 state.copy(
-                    visibleMapItems = content.items,
-                    visibleMapLevel = content.level
+                    visibleMapItems = content?.items ?: state.visibleMapItems,
+                    visibleMapLevel = content?.level ?: state.visibleMapLevel,
+                    visibleTripHeatCells = heatmapContent?.cells ?: state.visibleTripHeatCells,
+                    visibleTripHeatResolution = heatmapContent?.resolution ?: state.visibleTripHeatResolution,
+                    tripHeatmapDataVersion = heatmapContent?.dataVersion ?: state.tripHeatmapDataVersion
+                )
+            }
+        }
+    }
+
+    fun onTripHeatmapViewportChanged(bounds: PhotoMapBounds, zoom: Double) {
+        val requestedHeatResolution = heatResolutionForZoom(zoom)
+        val currentLoadedHeatBounds = loadedTripHeatBounds
+        if (loadedTripHeatResolution == requestedHeatResolution &&
+            currentLoadedHeatBounds?.contains(bounds) == true
+        ) {
+            return
+        }
+
+        tripHeatmapLoadJob?.cancel()
+        tripHeatmapViewportGeneration += 1L
+        val generation = tripHeatmapViewportGeneration
+        tripHeatmapLoadJob = viewModelScope.launch {
+            val heatmapContent = tripHeatmapStore.loadVisibleHeatmap(
+                bounds = bounds,
+                zoom = zoom
+            )
+            if (generation != tripHeatmapViewportGeneration) {
+                return@launch
+            }
+            loadedTripHeatBounds = heatmapContent.loadedBounds
+            loadedTripHeatResolution = heatmapContent.resolution
+            _uiState.update { state ->
+                state.copy(
+                    visibleTripHeatCells = heatmapContent.cells,
+                    visibleTripHeatResolution = heatmapContent.resolution,
+                    tripHeatmapDataVersion = heatmapContent.dataVersion
                 )
             }
         }
@@ -465,10 +534,18 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 val photoIdsByTripId = tripStore.getTripPhotoIdsByTripIds(
                     tripIds = markers.map { marker -> marker.tripId }
                 )
+                visibleMapLoadJob?.cancel()
+                viewportLoadGeneration += 1L
+                loadedTripHeatBounds = null
+                loadedTripHeatResolution = null
+                val heatmapContent = loadTripHeatmapForCurrentViewport()
                 _uiState.update { state ->
                     state.copy(
                         tripMarkers = markers,
                         tripPhotoIdsByTripId = photoIdsByTripId,
+                        visibleTripHeatCells = heatmapContent?.cells ?: state.visibleTripHeatCells,
+                        visibleTripHeatResolution = heatmapContent?.resolution ?: state.visibleTripHeatResolution,
+                        tripHeatmapDataVersion = heatmapContent?.dataVersion ?: state.tripHeatmapDataVersion,
                         isTripSegmentationRunning = false
                     )
                 }
@@ -594,15 +671,24 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                     settings = settingsSnapshot,
                     dateFilter = dateFilter
                 )
+                val heatmapContent = tripHeatmapStore.loadVisibleHeatmap(
+                    bounds = bounds,
+                    zoom = zoom
+                )
                 if (generation != clusterGeneration) {
                     return@launch
                 }
                 loadedClusterBounds = content.loadedBounds
                 loadedClusterLevel = content.level
+                loadedTripHeatBounds = heatmapContent.loadedBounds
+                loadedTripHeatResolution = heatmapContent.resolution
                 _uiState.update { state ->
                     state.copy(
                         visibleMapItems = content.items,
-                        visibleMapLevel = content.level
+                        visibleMapLevel = content.level,
+                        visibleTripHeatCells = heatmapContent.cells,
+                        visibleTripHeatResolution = heatmapContent.resolution,
+                        tripHeatmapDataVersion = heatmapContent.dataVersion
                     )
                 }
             } else {
@@ -613,6 +699,17 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                     )
                 }
             }
+        }
+    }
+
+    private suspend fun loadTripHeatmapForCurrentViewport() = lastViewportBounds?.let { bounds ->
+        val zoom = lastViewportZoom ?: return@let null
+        tripHeatmapStore.loadVisibleHeatmap(
+            bounds = bounds,
+            zoom = zoom
+        ).also { content ->
+            loadedTripHeatBounds = content.loadedBounds
+            loadedTripHeatResolution = content.resolution
         }
     }
 

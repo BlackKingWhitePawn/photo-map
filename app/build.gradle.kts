@@ -27,8 +27,8 @@ android {
         applicationId = "com.example.photomap"
         minSdk = 29
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.9.0"
+        versionCode = 16
+        versionName = "0.10.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\"", "\\\"")}\"")
@@ -66,7 +66,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.work.runtime)
     implementation(libs.maplibre.android.sdk)
+    implementation(libs.h3.android)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

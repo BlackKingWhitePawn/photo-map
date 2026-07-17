@@ -4,6 +4,7 @@ import com.example.photomap.core.permissions.PhotoAccessLevel
 import com.example.photomap.core.permissions.PhotoPermissionStatus
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.cluster.VisiblePhotoMapItem
+import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.trip.TripMapMarker
@@ -20,6 +21,9 @@ data class PhotoAccessUiState(
     val indexedPhotoCount: Int = 0,
     val visibleMapItems: List<VisiblePhotoMapItem> = emptyList(),
     val visibleMapLevel: Int = 0,
+    val visibleTripHeatCells: List<VisibleTripHeatCell> = emptyList(),
+    val visibleTripHeatResolution: Int = 0,
+    val tripHeatmapDataVersion: Long = 0L,
     val tripMarkers: List<TripMapMarker> = emptyList(),
     val tripPhotoIdsByTripId: Map<Long, List<Long>> = emptyMap(),
     val isTripSegmentationRunning: Boolean = false,

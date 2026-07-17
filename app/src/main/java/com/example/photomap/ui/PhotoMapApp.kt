@@ -37,6 +37,7 @@ fun PhotoMapApp(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     var focusedTripId by remember { mutableStateOf<Long?>(null) }
+    var mapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
     var tripMapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
 
     LaunchedEffect(state.permissionStatus.canReadImages, currentRoute) {
@@ -75,6 +76,12 @@ fun PhotoMapApp(
             ?.let { cameraState -> tripMapCameraState = cameraState }
     }
 
+    fun openTripsFromMap() {
+        focusedTripId = null
+        mapCameraState?.let { cameraState -> tripMapCameraState = cameraState }
+        navigateSingleTop(Routes.Trips)
+    }
+
     val mapPhotos = state.photos.filter { photo -> photo.matchesPhotoDateFilter(state.dateFilter) }
 
     NavHost(
@@ -93,6 +100,7 @@ fun PhotoMapApp(
             PhotoMapScreen(
                 photos = mapPhotos,
                 mapItems = state.visibleMapItems,
+                tripHeatCells = state.visibleTripHeatCells,
                 mapStyleUrl = BuildConfig.MAP_STYLE_URL,
                 clusterSettings = state.clusterSettings,
                 dateFilter = state.dateFilter,
@@ -105,10 +113,11 @@ fun PhotoMapApp(
                 onResume = viewModel::resumeCurrentAction,
                 onCancel = viewModel::cancelCurrentAction,
                 onOpenSettings = { navigateSingleTop(Routes.Settings) },
-                onOpenTrips = { navigateSingleTop(Routes.Trips) },
+                onOpenTrips = { openTripsFromMap() },
                 onClusterDensityChanged = viewModel::setClusterDensityCoefficientPercent,
                 onDateFilterChanged = viewModel::setMapDateFilter,
                 onDateFilterReset = viewModel::resetMapDateFilter,
+                onCameraStateChanged = { cameraState -> mapCameraState = cameraState },
                 onViewportChanged = viewModel::onMapViewportChanged
             )
         }
@@ -145,6 +154,7 @@ fun PhotoMapApp(
         composable(Routes.Trips) {
             TripMapScreen(
                 tripMarkers = state.tripMarkers,
+                tripHeatCells = state.visibleTripHeatCells,
                 photos = state.photos,
                 mapStyleUrl = BuildConfig.TRIP_MAP_STYLE_URL,
                 focusedTripId = focusedTripId,
@@ -153,6 +163,7 @@ fun PhotoMapApp(
                 onBack = { navigateBackOrMap() },
                 onRefreshTrips = { viewModel.rebuildTrips() },
                 onCameraStateChanged = { cameraState -> tripMapCameraState = cameraState },
+                onViewportChanged = viewModel::onTripHeatmapViewportChanged,
                 onFocusTrip = { tripId -> focusTripOnTripMap(tripId) },
                 onOpenTrip = { tripId ->
                     focusTripOnTripMap(tripId)

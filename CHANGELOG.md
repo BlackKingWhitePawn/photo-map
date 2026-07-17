@@ -8,6 +8,28 @@
 
 Изменений пока нет.
 
+## [0.10.0] - 2026-07-18
+
+### Added
+
+* Added a two-level trip heatmap built from detected trips and destinations instead of raw photo counts.
+* Added local trip heatmap tables in `photo_index.db` for aggregated heat cells, per-trip contributions, and heatmap metadata.
+* Added H3-backed heat aggregation at resolutions 4, 5, 6, 7, 8, and 9 with a deterministic local fallback grid.
+* Added trip heatmap intensity based on trip count, days spent, active days, and photo session count.
+* Added background `TripHeatmapWorker` scheduling through WorkManager after media permissions are available.
+* Added GeoJSON mapping for ready heat cells and a MapLibre `HeatmapLayer` rendered below photo clusters and trip markers.
+* Added visible heatmap diagnostics to the map debug panel and settings diagnostics.
+
+### Changed
+
+* Main map and trip map now request ready heatmap cells for the current viewport and zoom instead of calculating heat data during rendering.
+* Opening the trip map from the normal map now preserves the current map center and zoom instead of resetting the camera.
+* Android app metadata is now `versionName=0.10.0`, `versionCode=16`.
+
+### Fixed
+
+* Trip heatmap layer is now attached to both the main photo map and the trip map, so the heatmap remains visible behind trip markers.
+
 ## [0.9.0] - 2026-07-18
 
 ### Added

@@ -9,6 +9,9 @@ import com.example.photomap.data.cluster.CLUSTERING_VERSION
 import com.example.photomap.data.cluster.PhotoClusterLink
 import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.cluster.StoredPhotoCluster
+import com.example.photomap.data.heatmap.HEATMAP_ALGORITHM_VERSION
+import com.example.photomap.data.heatmap.TripHeatCellEntity
+import com.example.photomap.data.heatmap.TripHeatContributionEntity
 import com.example.photomap.data.media.PhotoIndexStats
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.matchesPhotoDateFilter
@@ -50,6 +53,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX index_photos_date_taken ON $PhotosTable($DateTaken)")
         db.createClusterTables()
         db.createTripTables()
+        db.createTripHeatmapTables()
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -60,6 +64,9 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             db.createTripTables()
         } else if (oldVersion < 4) {
             db.addTripPlaceNameColumns()
+        }
+        if (oldVersion < 5) {
+            db.createTripHeatmapTables()
         }
     }
 
@@ -267,6 +274,105 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun replaceTripHeatmap(
+        cells: List<TripHeatCellEntity>,
+        contributions: List<TripHeatContributionEntity>,
+        dataVersion: Long = System.currentTimeMillis()
+    ) {
+        writableDatabase.withTransaction {
+            delete(TripHeatContributionsTable, null, null)
+            delete(TripHeatCellsTable, null, null)
+
+            contributions.forEach { contribution ->
+                insertWithOnConflict(
+                    TripHeatContributionsTable,
+                    null,
+                    contribution.toContentValues(),
+                    SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            cells.forEach { cell ->
+                insertWithOnConflict(
+                    TripHeatCellsTable,
+                    null,
+                    cell.toContentValues(),
+                    SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            putTripHeatMeta(TripHeatMetaDataVersionKey, dataVersion)
+            putTripHeatMeta(TripHeatMetaAlgorithmVersionKey, HEATMAP_ALGORITHM_VERSION.toLong())
+        }
+    }
+
+    fun getVisibleTripHeatCells(
+        resolution: Int,
+        bounds: PhotoMapBounds,
+        algorithmVersion: Int = HEATMAP_ALGORITHM_VERSION
+    ): List<TripHeatCellEntity> {
+        val cells = mutableListOf<TripHeatCellEntity>()
+        readableDatabase.query(
+            TripHeatCellsTable,
+            TripHeatCellColumns,
+            "$TripHeatCellResolution = ? AND $TripHeatCellAlgorithmVersion = ? AND " +
+                "$TripHeatCellCenterLatitude >= ? AND $TripHeatCellCenterLatitude <= ? AND " +
+                "$TripHeatCellCenterLongitude >= ? AND $TripHeatCellCenterLongitude <= ?",
+            arrayOf(
+                resolution.toString(),
+                algorithmVersion.toString(),
+                bounds.south.toString(),
+                bounds.north.toString(),
+                bounds.west.toString(),
+                bounds.east.toString()
+            ),
+            null,
+            null,
+            "$TripHeatCellIntensity DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                cells += cursor.toTripHeatCell()
+            }
+        }
+        return cells
+    }
+
+    fun getTripHeatMaxIntensity(
+        resolution: Int,
+        algorithmVersion: Int = HEATMAP_ALGORITHM_VERSION
+    ): Double {
+        readableDatabase.rawQuery(
+            """
+            SELECT MAX($TripHeatCellIntensity) AS max_intensity
+            FROM $TripHeatCellsTable
+            WHERE $TripHeatCellResolution = ? AND $TripHeatCellAlgorithmVersion = ?
+            """.trimIndent(),
+            arrayOf(resolution.toString(), algorithmVersion.toString())
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) {
+                cursor.getDoubleValue("max_intensity") ?: 0.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    fun getTripHeatDataVersion(): Long {
+        readableDatabase.query(
+            TripHeatMetaTable,
+            arrayOf(TripHeatMetaValue),
+            "$TripHeatMetaKey = ?",
+            arrayOf(TripHeatMetaDataVersionKey),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) {
+                cursor.getLongValue(TripHeatMetaValue) ?: 0L
+            } else {
+                0L
+            }
+        }
+    }
+
     fun getTripMapMarkers(): List<TripMapMarker> {
         val trips = mutableListOf<TripMapMarker>()
         readableDatabase.query(
@@ -469,6 +575,47 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    private fun TripHeatContributionEntity.toContentValues(): ContentValues {
+        return ContentValues().apply {
+            put(TripHeatContributionTripId, tripId)
+            put(TripHeatContributionH3Index, h3Index)
+            put(TripHeatContributionResolution, resolution)
+            put(TripHeatContributionActiveDays, activeDays)
+            put(TripHeatContributionDaysSpent, daysSpent)
+            put(TripHeatContributionSessionCount, sessionCount)
+            put(TripHeatContributionWeight, weight)
+        }
+    }
+
+    private fun TripHeatCellEntity.toContentValues(): ContentValues {
+        return ContentValues().apply {
+            put(TripHeatCellH3Index, h3Index)
+            put(TripHeatCellResolution, resolution)
+            put(TripHeatCellCenterLatitude, centerLatitude)
+            put(TripHeatCellCenterLongitude, centerLongitude)
+            put(TripHeatCellTripCount, tripCount)
+            put(TripHeatCellActiveDays, activeDays)
+            put(TripHeatCellDaysSpent, daysSpent)
+            put(TripHeatCellSessionCount, sessionCount)
+            put(TripHeatCellLatestTripAt, latestTripAt)
+            put(TripHeatCellIntensity, intensity)
+            put(TripHeatCellAlgorithmVersion, algorithmVersion)
+            put(TripHeatCellUpdatedAt, updatedAt)
+        }
+    }
+
+    private fun SQLiteDatabase.putTripHeatMeta(key: String, value: Long) {
+        insertWithOnConflict(
+            TripHeatMetaTable,
+            null,
+            ContentValues().apply {
+                put(TripHeatMetaKey, key)
+                put(TripHeatMetaValue, value)
+            },
+            SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
     private fun Cursor.toIndexedPhoto(): IndexedPhoto {
         return IndexedPhoto(
             mediaId = getLongValue(MediaId) ?: error("Indexed photo without media id"),
@@ -525,6 +672,23 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             type = getStringValue(TripTypeColumn)?.let { value ->
                 runCatching { TripType.valueOf(value) }.getOrNull()
             } ?: TripType.UNKNOWN
+        )
+    }
+
+    private fun Cursor.toTripHeatCell(): TripHeatCellEntity {
+        return TripHeatCellEntity(
+            h3Index = getStringValue(TripHeatCellH3Index) ?: error("Trip heat cell without h3 index"),
+            resolution = getIntNullableValue(TripHeatCellResolution) ?: 0,
+            centerLatitude = getDoubleValue(TripHeatCellCenterLatitude) ?: 0.0,
+            centerLongitude = getDoubleValue(TripHeatCellCenterLongitude) ?: 0.0,
+            tripCount = getIntNullableValue(TripHeatCellTripCount) ?: 0,
+            activeDays = getIntNullableValue(TripHeatCellActiveDays) ?: 0,
+            daysSpent = getIntNullableValue(TripHeatCellDaysSpent) ?: 0,
+            sessionCount = getIntNullableValue(TripHeatCellSessionCount) ?: 0,
+            latestTripAt = getLongValue(TripHeatCellLatestTripAt),
+            intensity = getDoubleValue(TripHeatCellIntensity) ?: 0.0,
+            algorithmVersion = getIntNullableValue(TripHeatCellAlgorithmVersion) ?: 0,
+            updatedAt = getLongValue(TripHeatCellUpdatedAt) ?: 0L
         )
     }
 
@@ -665,6 +829,67 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         execSQL("CREATE INDEX IF NOT EXISTS index_trip_destinations_trip ON $TripDestinationsTable($TripDestinationTripId)")
     }
 
+    private fun SQLiteDatabase.createTripHeatmapTables() {
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripHeatCellsTable (
+                $TripHeatCellH3Index TEXT NOT NULL,
+                $TripHeatCellResolution INTEGER NOT NULL,
+                $TripHeatCellCenterLatitude REAL NOT NULL,
+                $TripHeatCellCenterLongitude REAL NOT NULL,
+                $TripHeatCellTripCount INTEGER NOT NULL,
+                $TripHeatCellActiveDays INTEGER NOT NULL,
+                $TripHeatCellDaysSpent INTEGER NOT NULL,
+                $TripHeatCellSessionCount INTEGER NOT NULL,
+                $TripHeatCellLatestTripAt INTEGER,
+                $TripHeatCellIntensity REAL NOT NULL,
+                $TripHeatCellAlgorithmVersion INTEGER NOT NULL,
+                $TripHeatCellUpdatedAt INTEGER NOT NULL,
+                PRIMARY KEY ($TripHeatCellH3Index, $TripHeatCellResolution)
+            )
+            """.trimIndent()
+        )
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripHeatContributionsTable (
+                $TripHeatContributionTripId INTEGER NOT NULL,
+                $TripHeatContributionH3Index TEXT NOT NULL,
+                $TripHeatContributionResolution INTEGER NOT NULL,
+                $TripHeatContributionActiveDays INTEGER NOT NULL,
+                $TripHeatContributionDaysSpent INTEGER NOT NULL,
+                $TripHeatContributionSessionCount INTEGER NOT NULL,
+                $TripHeatContributionWeight REAL NOT NULL,
+                PRIMARY KEY (
+                    $TripHeatContributionTripId,
+                    $TripHeatContributionH3Index,
+                    $TripHeatContributionResolution
+                )
+            )
+            """.trimIndent()
+        )
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripHeatMetaTable (
+                $TripHeatMetaKey TEXT PRIMARY KEY NOT NULL,
+                $TripHeatMetaValue INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        execSQL(
+            "CREATE INDEX IF NOT EXISTS index_trip_heat_cells_visible ON $TripHeatCellsTable(" +
+                "$TripHeatCellResolution, $TripHeatCellAlgorithmVersion, " +
+                "$TripHeatCellCenterLatitude, $TripHeatCellCenterLongitude)"
+        )
+        execSQL(
+            "CREATE INDEX IF NOT EXISTS index_trip_heat_cells_intensity ON $TripHeatCellsTable(" +
+                "$TripHeatCellResolution, $TripHeatCellAlgorithmVersion, $TripHeatCellIntensity)"
+        )
+        execSQL(
+            "CREATE INDEX IF NOT EXISTS index_trip_heat_contributions_cell ON $TripHeatContributionsTable(" +
+                "$TripHeatContributionResolution, $TripHeatContributionH3Index)"
+        )
+    }
+
     private fun SQLiteDatabase.addTripPlaceNameColumns() {
         execSQL("ALTER TABLE $TripsTable ADD COLUMN $TripPlaceName TEXT")
         execSQL("ALTER TABLE $TripDestinationsTable ADD COLUMN $TripDestinationPlaceName TEXT")
@@ -672,7 +897,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DatabaseName = "photo_index.db"
-        private const val DatabaseVersion = 4
+        private const val DatabaseVersion = 5
 
         private const val PhotosTable = "photos"
         private const val PhotoClustersTable = "photo_clusters"
@@ -681,6 +906,9 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         private const val TripsTable = "trips"
         private const val TripPhotoLinksTable = "trip_photo_links"
         private const val TripDestinationsTable = "trip_destinations"
+        private const val TripHeatCellsTable = "trip_heat_cells"
+        private const val TripHeatContributionsTable = "trip_heat_contributions"
+        private const val TripHeatMetaTable = "trip_heat_meta"
         private const val MediaId = "media_id"
         private const val Uri = "uri"
         private const val DisplayName = "display_name"
@@ -749,6 +977,32 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         private const val TripDestinationLastDay = "last_day"
         private const val TripDestinationPlaceName = "place_name"
 
+        private const val TripHeatCellH3Index = "h3_index"
+        private const val TripHeatCellResolution = "resolution"
+        private const val TripHeatCellCenterLatitude = "center_latitude"
+        private const val TripHeatCellCenterLongitude = "center_longitude"
+        private const val TripHeatCellTripCount = "trip_count"
+        private const val TripHeatCellActiveDays = "active_days"
+        private const val TripHeatCellDaysSpent = "days_spent"
+        private const val TripHeatCellSessionCount = "session_count"
+        private const val TripHeatCellLatestTripAt = "latest_trip_at"
+        private const val TripHeatCellIntensity = "intensity"
+        private const val TripHeatCellAlgorithmVersion = "algorithm_version"
+        private const val TripHeatCellUpdatedAt = "updated_at"
+
+        private const val TripHeatContributionTripId = "trip_id"
+        private const val TripHeatContributionH3Index = "h3_index"
+        private const val TripHeatContributionResolution = "resolution"
+        private const val TripHeatContributionActiveDays = "active_days"
+        private const val TripHeatContributionDaysSpent = "days_spent"
+        private const val TripHeatContributionSessionCount = "session_count"
+        private const val TripHeatContributionWeight = "weight"
+
+        private const val TripHeatMetaKey = "key"
+        private const val TripHeatMetaValue = "value"
+        private const val TripHeatMetaDataVersionKey = "data_version"
+        private const val TripHeatMetaAlgorithmVersionKey = "algorithm_version"
+
         private val Columns = arrayOf(
             MediaId,
             Uri,
@@ -800,6 +1054,21 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             TripPlaceName,
             TripCreatedAt,
             TripUpdatedAt
+        )
+
+        private val TripHeatCellColumns = arrayOf(
+            TripHeatCellH3Index,
+            TripHeatCellResolution,
+            TripHeatCellCenterLatitude,
+            TripHeatCellCenterLongitude,
+            TripHeatCellTripCount,
+            TripHeatCellActiveDays,
+            TripHeatCellDaysSpent,
+            TripHeatCellSessionCount,
+            TripHeatCellLatestTripAt,
+            TripHeatCellIntensity,
+            TripHeatCellAlgorithmVersion,
+            TripHeatCellUpdatedAt
         )
     }
 }

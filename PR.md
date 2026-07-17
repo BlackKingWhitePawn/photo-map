@@ -1,48 +1,34 @@
-# PR: Add trip segmentation map
+# PR: Release v0.10.0 trip heatmap
 
 ## Summary
 
-* Added local semantic trip segmentation for indexed photos with valid date and geotag metadata.
-* Added trip persistence in `photo_index.db` for trips, trip-photo links, and destinations.
-* Stored resolved trip place names in `photo_index.db` during segmentation.
-* Added `Поездки` FAB on the main map.
-* Added a separate dark MapLibre trip map using `TRIP_MAP_STYLE_URL`.
-* Rendered each trip as a thumbnail marker with a `+N` photo-count badge.
-* Added a trip detail page opened by tapping a trip marker.
-* Rendered the selected trip with platform geocoder place names in the title and trip dates in the subtitle.
-* Rendered the selected trip as a smoothed chronological route line over the dark map, with photo points and a start-to-end gradient.
-* Added clickable route-point thumbnails that scroll the lower gallery to the selected trip photo.
-* Opened lower-grid trip photos in the default Android gallery through a read-only view intent.
-* Added a grid gallery of the selected trip photos below the route map.
-* Added a long transparent right-edge trip timeline scrubber that snaps to trip points and shows semi-transparent trip labels.
-* Added a collapsed `...` entry button for the trip timeline scrubber.
-* Changed trip timeline dragging to wheel-like scrolling with minimal edge padding.
-* Highlighted the active trip timeline point with accent color and a border; single-trip timelines render as a point without a line.
-* Added a matching transparent right-edge photo scrubber for jumping between photos inside a trip.
-* Added a trip detail centering action that resets the route map zoom to the whole trip.
-* Switched app routing from a manual screen stack to Navigation Compose.
-* Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear immediately.
-* Preserved selected trip zoom and center when returning from trip detail.
-* Blocked accidental overlay taps shortly after map gestures so pinch/drag/zoom does not open trips or clusters.
-* Fixed severe main-map lag by keeping tap-block timing outside Compose state and throttling live marker reprojection.
-* Bumped Android metadata to `versionName=0.9.0`, `versionCode=15`.
+* Added a trip heatmap built from detected trips and destinations, not raw photo counts.
+* Stored heatmap cells, per-trip contributions, and heatmap metadata in `photo_index.db`.
+* Aggregated trip destinations into H3 levels 4, 5, 6, 7, 8, and 9 with a deterministic fallback grid.
+* Weighted heat intensity by trip count, days spent, active days, and photo session count.
+* Scheduled background heatmap refresh through WorkManager after media permissions are available.
+* Exposed ready heat cells as GeoJSON points and rendered them through a MapLibre `HeatmapLayer`.
+* Rendered the heatmap below ordinary photo clusters on the main map and below trip markers on the trip map.
+* Added map/settings diagnostics for visible heatmap cells, resolution, and data version.
+* Preserved the normal map center and zoom when opening the trip map.
+* Bumped Android metadata to `versionName=0.10.0`, `versionCode=16`.
 
 ## Scope
 
 Included:
 
-* MVP heuristic trip segmentation;
-* dark OpenFreeMap style for the trip map;
-* local-only storage and UI for trip markers;
-* trip detail route map, stored platform geocoder place summary, route thumbnails, read-only gallery open, and photo grid;
-* Navigation Compose dependency and `NavHost` routes.
+* local-only trip heatmap MVP;
+* full heatmap rebuild after trip segmentation;
+* H3 aggregation and persisted ready cells;
+* main-map and trip-map heatmap rendering;
+* release documentation for `v0.10.0`.
 
 Not included:
 
-* editing trip boundaries;
-* reverse geocoding or city names from network APIs;
-* external geocoding SDKs or API keys;
-* HMM/HSMM, Bayesian online detection, or external ML libraries;
+* incremental per-trip heatmap rebuild UI controls;
+* user-selectable heatmap modes;
+* recency weighting modes;
+* route-only transit layer;
 * changing original user photos.
 
 ## Checks
@@ -56,24 +42,24 @@ The app remains read-only for user photos:
 * no MediaStore delete/trash/write requests;
 * no EXIF mutation;
 * no upload of photos, coordinates, EXIF, media IDs, or trip statistics;
-* trip and map data stay local to the device.
+* trip and heatmap data stay local to the device.
 
 ## Release
 
 Target release:
 
 ```text
-v0.9.0
+v0.10.0
 ```
 
 Release notes:
 
 ```text
-release-notes/v0.9.0.md
+release-notes/v0.10.0.md
 ```
 
 APK asset:
 
 ```text
-not built after the v0.9.0 version bump
+not built after the v0.10.0 version bump
 ```

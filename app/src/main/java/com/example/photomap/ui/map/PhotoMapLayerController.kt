@@ -4,7 +4,14 @@ import android.util.Log
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.core.util.AppDiagnostics
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.HeatmapLayer
+import org.maplibre.android.style.layers.PropertyFactory.heatmapColor
+import org.maplibre.android.style.layers.PropertyFactory.heatmapIntensity
+import org.maplibre.android.style.layers.PropertyFactory.heatmapOpacity
+import org.maplibre.android.style.layers.PropertyFactory.heatmapRadius
+import org.maplibre.android.style.layers.PropertyFactory.heatmapWeight
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
 import org.maplibre.android.style.layers.PropertyFactory.circleOpacity
 import org.maplibre.android.style.layers.PropertyFactory.circleRadius
@@ -28,6 +35,7 @@ import org.maplibre.geojson.FeatureCollection
 
 class PhotoMapLayerController {
     private var configuredSourceKey: PhotoMapSourceKey? = null
+    private var isTripHeatmapConfigured: Boolean = false
 
     fun update(
         style: Style,
@@ -72,6 +80,36 @@ class PhotoMapLayerController {
 
     fun reset() {
         configuredSourceKey = null
+        isTripHeatmapConfigured = false
+    }
+
+    fun updateTripHeatmap(
+        style: Style,
+        featureCollection: FeatureCollection
+    ) {
+        val source = style.getSourceAs<GeoJsonSource>(TRIP_HEATMAP_SOURCE_ID)
+        if (source == null || !isTripHeatmapConfigured || style.getLayer(TRIP_HEATMAP_LAYER_ID) == null) {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Recreate trip heatmap layer: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Recreate trip heatmap layer: features=${featureCollection.features()?.size}"
+            )
+            style.recreateTripHeatmapLayer(featureCollection)
+            isTripHeatmapConfigured = true
+        } else {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Update trip heatmap source: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Update trip heatmap source: features=${featureCollection.features()?.size}"
+            )
+            source.setGeoJson(featureCollection)
+        }
     }
 
     fun updateVisibleThumbnails(
@@ -205,6 +243,72 @@ private fun Style.recreatePhotoMapLayers(
     )
 }
 
+private fun Style.recreateTripHeatmapLayer(featureCollection: FeatureCollection) {
+    removeLayer(TRIP_HEATMAP_LAYER_ID)
+    removeSource(TRIP_HEATMAP_SOURCE_ID)
+
+    addSource(
+        GeoJsonSource(
+            TRIP_HEATMAP_SOURCE_ID,
+            featureCollection
+        )
+    )
+
+    val heatmapLayer = HeatmapLayer(TRIP_HEATMAP_LAYER_ID, TRIP_HEATMAP_SOURCE_ID)
+        .withProperties(
+            heatmapWeight(Expression.get(TRIP_HEATMAP_WEIGHT_PROPERTY)),
+            heatmapColor(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.heatmapDensity(),
+                    Expression.stop(0.00f, Expression.rgba(45, 212, 191, 0.0f)),
+                    Expression.stop(0.20f, Expression.rgba(45, 212, 191, 0.28f)),
+                    Expression.stop(0.45f, Expression.rgba(255, 209, 102, 0.62f)),
+                    Expression.stop(0.70f, Expression.rgba(255, 122, 89, 0.78f)),
+                    Expression.stop(1.00f, Expression.rgba(255, 92, 122, 0.92f))
+                )
+            ),
+            heatmapIntensity(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.stop(3, 0.55f),
+                    Expression.stop(10, 1.0f),
+                    Expression.stop(16, 1.35f)
+                )
+            ),
+            heatmapRadius(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.stop(3, 16f),
+                    Expression.stop(10, 28f),
+                    Expression.stop(16, 44f)
+                )
+            ),
+            heatmapOpacity(0.55f)
+        )
+
+    val photoLayerId = listOf(
+        PHOTO_CLUSTER_LAYER_ID,
+        PHOTO_CLUSTER_THUMBNAIL_LAYER_ID,
+        PHOTO_CLUSTER_COUNT_LAYER_ID,
+        PHOTO_UNCLUSTERED_LAYER_ID,
+        PHOTO_THUMBNAIL_LAYER_ID
+    ).firstOrNull { layerId -> getLayer(layerId) != null }
+    if (photoLayerId != null) {
+        addLayerBelow(heatmapLayer, photoLayerId)
+        return
+    }
+
+    val topBaseLayerId = layers.lastOrNull()?.id
+    if (topBaseLayerId == null) {
+        addLayer(heatmapLayer)
+    } else {
+        addLayerAbove(heatmapLayer, topBaseLayerId)
+    }
+}
+
 private fun Style.updatePhotoMapLayerColors(colors: PhotoMapLayerColors) {
     getLayerAs<CircleLayer>(PHOTO_CLUSTER_LAYER_ID)?.setProperties(
         circleColor(colors.clusterSmall),
@@ -244,5 +348,7 @@ const val PHOTO_CLUSTER_THUMBNAIL_LAYER_ID = "photo-cluster-thumbnail-layer"
 const val PHOTO_CLUSTER_COUNT_LAYER_ID = "photo-cluster-count-layer"
 const val PHOTO_UNCLUSTERED_LAYER_ID = "photo-unclustered-layer"
 const val PHOTO_THUMBNAIL_LAYER_ID = "photo-thumbnail-layer"
+const val TRIP_HEATMAP_SOURCE_ID = "trip-heatmap-source"
+const val TRIP_HEATMAP_LAYER_ID = "trip-heatmap-layer"
 
 private const val PhotoMapLayerLogTag = "PhotoMapMap"

@@ -1,5 +1,7 @@
 package com.example.photomap.domain.trip
 
+const val TRIP_ALGORITHM_VERSION = 1
+
 enum class TripType {
     SINGLE_DESTINATION_TRIP,
     MULTI_DESTINATION_TRIP,

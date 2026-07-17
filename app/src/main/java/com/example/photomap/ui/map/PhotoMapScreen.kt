@@ -95,9 +95,11 @@ import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.core.util.AppDiagnostics
 import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.cluster.VisiblePhotoMapItem
+import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.photoDateDayToMillis
+import com.example.photomap.ui.trips.TripMapCameraState
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -135,6 +137,7 @@ import org.maplibre.geojson.Point
 fun PhotoMapScreen(
     photos: List<DevicePhoto>,
     mapItems: List<VisiblePhotoMapItem>,
+    tripHeatCells: List<VisibleTripHeatCell>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
     dateFilter: PhotoDateFilter,
@@ -151,6 +154,7 @@ fun PhotoMapScreen(
     onClusterDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
+    onCameraStateChanged: (TripMapCameraState) -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val normalizedClusterSettings = clusterSettings.normalized()
@@ -185,6 +189,7 @@ fun PhotoMapScreen(
                     PhotoMapLibreMap(
                         photos = photosWithLocation,
                         mapItems = mapItems,
+                        tripHeatCells = tripHeatCells,
                         mapStyleUrl = mapStyleUrl,
                         clusterSettings = normalizedClusterSettings,
                         dateFilter = dateFilter,
@@ -194,6 +199,7 @@ fun PhotoMapScreen(
                         onDateFilterChanged = onDateFilterChanged,
                         onDateFilterReset = onDateFilterReset,
                         onOpenTrips = onOpenTrips,
+                        onCameraStateChanged = onCameraStateChanged,
                         onViewportChanged = onViewportChanged
                     )
 
@@ -341,6 +347,7 @@ private fun MapMessage(
 private fun PhotoMapLibreMap(
     photos: List<DevicePhoto>,
     mapItems: List<VisiblePhotoMapItem>,
+    tripHeatCells: List<VisibleTripHeatCell>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
     dateFilter: PhotoDateFilter,
@@ -350,6 +357,7 @@ private fun PhotoMapLibreMap(
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
     onOpenTrips: () -> Unit,
+    onCameraStateChanged: (TripMapCameraState) -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val context = LocalContext.current
@@ -383,6 +391,7 @@ private fun PhotoMapLibreMap(
     val latestPhotosById = rememberUpdatedState(photosById)
     val latestClusterSettings = rememberUpdatedState(clusterSettings)
     val latestMapRenderState = rememberUpdatedState(mapRenderState)
+    val latestOnCameraStateChanged = rememberUpdatedState(onCameraStateChanged)
     val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
     val cameraPositions = remember(photos) {
         photos.mapNotNull { photo ->
@@ -411,6 +420,7 @@ private fun PhotoMapLibreMap(
                     overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
                     lastCameraMoveProjectionAtMs.set(now)
                     thumbnailRefreshKey += 1
+                    latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.addOnMapClickListener { point ->
@@ -481,6 +491,7 @@ private fun PhotoMapLibreMap(
         styleGeneration,
         thumbnailRefreshKey,
         mapItems,
+        tripHeatCells,
         photosById,
         clusterSettings,
         layerColors
@@ -499,6 +510,10 @@ private fun PhotoMapLibreMap(
         )
         mapRenderState = renderState
         val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        layerController.updateTripHeatmap(
+            style = style,
+            featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(tripHeatCells)
+        )
         layerController.update(
             style = style,
             featureCollection = emptyPhotoFeatureCollection(),
@@ -512,6 +527,7 @@ private fun PhotoMapLibreMap(
         val refreshMessage =
             "Map render refresh: photos=${photosById.size}, clusters=${renderState.clusterCount}, " +
                 "singles=${renderState.singleCount}, thumbnails=${renderState.thumbnailPhotoIds.size}, " +
+                "tripHeatCells=${tripHeatCells.size}, " +
                 "clusterThumbs=${renderState.clusterThumbnailRequests.size}, " +
                 "projected=${renderState.projectedPhotoCount}, baseRadius=${clusterSettings.radiusPx}, " +
                 "effectiveRadius=${renderState.effectiveClusterRadiusPx.roundToInt()}, " +
@@ -547,9 +563,13 @@ private fun PhotoMapLibreMap(
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
                 hasFitCamera = true
+                latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                 mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 mapView.postDelayed(
-                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    {
+                        latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
+                        mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    },
                     MapViewportRefreshDelayMs
                 )
             }.onFailure { error ->
@@ -578,9 +598,13 @@ private fun PhotoMapLibreMap(
         mapView.post {
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+                latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                 mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 mapView.postDelayed(
-                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    {
+                        latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
+                        mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    },
                     MapViewportRefreshDelayMs
                 )
             }.onFailure { error ->
@@ -614,6 +638,7 @@ private fun PhotoMapLibreMap(
         if (showDebugPanel) {
             ClusterDebugPanel(
                 renderState = mapRenderState,
+                tripHeatCells = tripHeatCells,
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(12.dp)
@@ -850,10 +875,14 @@ private fun MapPhotoMarker(
 @Composable
 private fun ClusterDebugPanel(
     renderState: PhotoMapRenderState,
+    tripHeatCells: List<VisibleTripHeatCell>,
     modifier: Modifier = Modifier
 ) {
     val clusters = remember(renderState) {
         renderState.items.filter { item -> item.isCluster }
+    }
+    val maxHeatWeight = remember(tripHeatCells) {
+        tripHeatCells.maxOfOrNull { cell -> cell.normalizedIntensity } ?: 0.0
     }
     val scrollState = rememberScrollState()
 
@@ -869,7 +898,7 @@ private fun ClusterDebugPanel(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = "Debug: кластеров ${clusters.size}",
+                text = "Debug: clusters ${clusters.size}, heat ${tripHeatCells.size}, max ${formatDebugCoordinate(maxHeatWeight)}",
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold
             )
@@ -3261,6 +3290,15 @@ private fun MapLibreMap.dispatchViewportChanged(
         Log.w(PhotoMapLogTag, "Failed to dispatch map viewport", error)
         AppDiagnostics.record(PhotoMapLogTag, "Failed to dispatch map viewport", error)
     }
+}
+
+private fun MapLibreMap.toTripMapCameraState(): TripMapCameraState {
+    val target = cameraPosition.target!!
+    return TripMapCameraState(
+        latitude = target.latitude,
+        longitude = target.longitude,
+        zoom = cameraPosition.zoom
+    )
 }
 
 private fun MapLibreMap.configureGestures() {

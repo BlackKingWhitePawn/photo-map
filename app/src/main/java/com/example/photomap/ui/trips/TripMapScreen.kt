@@ -88,10 +88,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.example.photomap.data.cluster.PhotoMapBounds
+import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.ui.map.PhotoMapLayerController
+import com.example.photomap.ui.map.TripHeatmapFeatureMapper
 import java.util.Date
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
@@ -113,6 +117,7 @@ import kotlin.math.sqrt
 @Composable
 fun TripMapScreen(
     tripMarkers: List<TripMapMarker>,
+    tripHeatCells: List<VisibleTripHeatCell>,
     photos: List<DevicePhoto>,
     mapStyleUrl: String,
     focusedTripId: Long?,
@@ -121,6 +126,7 @@ fun TripMapScreen(
     onBack: () -> Unit,
     onRefreshTrips: () -> Unit,
     onCameraStateChanged: (TripMapCameraState) -> Unit,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit,
     onFocusTrip: (Long) -> Unit,
     onOpenTrip: (Long) -> Unit
 ) {
@@ -149,11 +155,13 @@ fun TripMapScreen(
                 ) {
                     TripMapLibreMap(
                         tripMarkers = tripMarkers,
+                        tripHeatCells = tripHeatCells,
                         photosById = photosById,
                         mapStyleUrl = mapStyleUrl,
                         focusedTripId = focusedTripId,
                         initialCameraState = initialCameraState,
                         onCameraStateChanged = onCameraStateChanged,
+                        onViewportChanged = onViewportChanged,
                         onOpenTrip = onOpenTrip
                     )
                     if (tripMarkers.isNotEmpty()) {
@@ -893,15 +901,18 @@ private fun TripPhotoScrubber(
 @Composable
 private fun TripMapLibreMap(
     tripMarkers: List<TripMapMarker>,
+    tripHeatCells: List<VisibleTripHeatCell>,
     photosById: Map<Long, DevicePhoto>,
     mapStyleUrl: String,
     focusedTripId: Long?,
     initialCameraState: TripMapCameraState?,
     onCameraStateChanged: (TripMapCameraState) -> Unit,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit,
     onOpenTrip: (Long) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val heatmapLayerController = remember { PhotoMapLayerController() }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var isStyleReady by remember { mutableStateOf(false) }
     var cameraRevision by remember { mutableStateOf(0) }
@@ -914,6 +925,7 @@ private fun TripMapLibreMap(
     val latestFocusedTripId = rememberUpdatedState(focusedTripId)
     val latestInitialCameraState = rememberUpdatedState(initialCameraState)
     val latestOnCameraStateChanged = rememberUpdatedState(onCameraStateChanged)
+    val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
 
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
@@ -936,11 +948,20 @@ private fun TripMapLibreMap(
                     lastCameraMoveProjectionAtMs.set(now)
                     cameraRevision += 1
                     latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
+                    mapLibreMap.dispatchTripHeatmapViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.setStyle(mapStyleUrl) { style ->
                     style.applyTripDarkStyle()
+                    heatmapLayerController.reset()
+                    heatmapLayerController.updateTripHeatmap(
+                        style = style,
+                        featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(tripHeatCells)
+                    )
                     isStyleReady = true
                     cameraRevision += 1
+                    post {
+                        mapLibreMap.dispatchTripHeatmapViewportChanged(latestOnViewportChanged.value)
+                    }
                 }
             }
         }
@@ -979,9 +1000,22 @@ private fun TripMapLibreMap(
                 hasAppliedInitialCamera = true
                 appliedFocusedTripId = focusedTripId
                 latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
+                mapLibreMap.dispatchTripHeatmapViewportChanged(latestOnViewportChanged.value)
             }
             projectedMarkers = mapLibreMap.projectTripMarkers(tripMarkers, mapView.width, mapView.height)
         }
+    }
+
+    LaunchedEffect(map, isStyleReady, tripHeatCells) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady) {
+            return@LaunchedEffect
+        }
+        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        heatmapLayerController.updateTripHeatmap(
+            style = style,
+            featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(tripHeatCells)
+        )
     }
 
     LaunchedEffect(map, isStyleReady, cameraRevision, tripMarkers) {
@@ -1000,7 +1034,7 @@ private fun TripMapLibreMap(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.28f))
+                .background(Color.Black.copy(alpha = 0.16f))
         )
         TripMarkerOverlay(
             projectedMarkers = projectedMarkers,
@@ -1599,6 +1633,31 @@ private fun MapLibreMap.toTripMapCameraState(): TripMapCameraState {
         longitude = target!!.longitude,
         zoom = cameraPosition.zoom
     )
+}
+
+private fun MapLibreMap.dispatchTripHeatmapViewportChanged(
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
+) {
+    runCatching {
+        val visibleRegion = projection.visibleRegion
+        val points = listOf(
+            visibleRegion.nearLeft,
+            visibleRegion.nearRight,
+            visibleRegion.farLeft,
+            visibleRegion.farRight
+        )
+        onViewportChanged(
+            PhotoMapBounds(
+                south = points.minOf { point -> point!!.latitude },
+                west = points.minOf { point -> point!!.longitude },
+                north = points.maxOf { point -> point!!.latitude },
+                east = points.maxOf { point -> point!!.longitude }
+            ),
+            cameraPosition.zoom
+        )
+    }.onFailure { error ->
+        Log.w(TripMapLogTag, "Failed to dispatch trip heatmap viewport", error)
+    }
 }
 
 private fun scrubberIndexForOffset(

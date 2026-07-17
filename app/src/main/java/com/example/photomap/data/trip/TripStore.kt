@@ -5,6 +5,7 @@ import android.location.Address
 import android.location.Geocoder
 import android.util.Log
 import com.example.photomap.core.util.AppDiagnostics
+import com.example.photomap.data.heatmap.TripHeatmapBuilder
 import com.example.photomap.data.local.PhotoIndexDatabase
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.trip.DetectedTrip
@@ -24,12 +25,19 @@ class TripStore(
 ) {
     private val appContext = context.applicationContext
     private val database = PhotoIndexDatabase(appContext)
+    private val heatmapBuilder = TripHeatmapBuilder()
 
     suspend fun rebuildTrips(
         photos: Collection<DevicePhoto>
     ): List<TripMapMarker> {
         val result = withContext(computeDispatcher) {
             segmenter.segmentTrips(photos)
+        }
+        val heatmap = withContext(computeDispatcher) {
+            heatmapBuilder.build(
+                photos = photos,
+                segmentationResult = result
+            )
         }
         val placeNamesByTripId = withContext(ioDispatcher) {
             appContext.resolveTripPlaceNames(result.trips)
@@ -39,9 +47,15 @@ class TripStore(
                 trips = result.trips,
                 placeNamesByTripId = placeNamesByTripId
             )
+            database.replaceTripHeatmap(
+                cells = heatmap.cells,
+                contributions = heatmap.contributions,
+                dataVersion = heatmap.dataVersion
+            )
         }
         val message = "Trip segmentation rebuilt: trips=${result.trips.size}, " +
-            "bases=${result.baseRegions.size}, skipped=${result.skippedPhotos}"
+            "bases=${result.baseRegions.size}, heatCells=${heatmap.cells.size}, " +
+            "heatContributions=${heatmap.contributions.size}, skipped=${result.skippedPhotos}"
         Log.d(Tag, message)
         AppDiagnostics.record(Tag, message)
         return loadTripMarkers()

@@ -1,9 +1,9 @@
-# Branch `feature-14-trip-segmentation`
+# Branch `release-0-10-0`
 
 ## Release Target
 
 ```text
-v0.9.0
+v0.10.0
 ```
 
 ## Задача
@@ -446,7 +446,7 @@ trip/{tripId}
 * дни без фотографий не разрывают поездку автоматически;
 * случайные выбросы снижают confidence или попадают в transit/noise, но не ломают радиус поездки;
 * добавлены focused unit-тесты алгоритма;
-* README/CHANGELOG/release notes обновлены под `v0.9.0`;
+* README/CHANGELOG/release notes обновлены под `v0.10.0`;
 * не добавлены сетевые API, аналитика, write/manage-разрешения или операции изменения оригинальных фото.
 
 ## Ограничение текущей подготовки

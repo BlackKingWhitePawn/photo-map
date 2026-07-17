@@ -82,7 +82,7 @@ data class VisiblePhotoMapItem(
     val photoIds: List<Long>
 ) {
     val isAggregate: Boolean
-        get() = level > 0 || photoCount > 1
+        get() = photoCount > 1
 }
 
 data class VisiblePhotoMapContent(
@@ -110,6 +110,25 @@ fun clusterLevelForZoom(zoom: Double): Int {
 }
 
 fun StoredPhotoCluster.toVisiblePhotoMapItem(photoIds: List<Long> = emptyList()): VisiblePhotoMapItem {
+    val visiblePhotoIds = photoIds.distinct()
+    val representativePhotoId = coverPhotoId ?: visiblePhotoIds.firstOrNull()
+    if (photoCount <= 1 && representativePhotoId != null) {
+        return VisiblePhotoMapItem(
+            id = "photo-$representativePhotoId",
+            level = 0,
+            latitude = latitude,
+            longitude = longitude,
+            photoCount = 1,
+            priorityScore = 1.0,
+            minLatitude = minLatitude,
+            maxLatitude = maxLatitude,
+            minLongitude = minLongitude,
+            maxLongitude = maxLongitude,
+            coverPhotoId = representativePhotoId,
+            photoIds = listOf(representativePhotoId)
+        )
+    }
+
     return VisiblePhotoMapItem(
         id = clusterId,
         level = level,
@@ -122,7 +141,7 @@ fun StoredPhotoCluster.toVisiblePhotoMapItem(photoIds: List<Long> = emptyList())
         minLongitude = minLongitude,
         maxLongitude = maxLongitude,
         coverPhotoId = coverPhotoId,
-        photoIds = photoIds
+        photoIds = visiblePhotoIds
     )
 }
 

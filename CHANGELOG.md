@@ -8,6 +8,14 @@
 
 Изменений пока нет.
 
+## [0.8.2] - 2026-07-17
+
+### Fixed
+
+* Fixed singleton stored clusters so a photo with `photoCount=1` is exposed to the map as a single photo marker instead of a cluster.
+* Fixed duplicated single-photo rendering where the same item could appear as both a cluster and a photo marker.
+* Fixed the visible marker artifact by clearing the duplicate MapLibre marker sources and rendering map markers through the Compose overlay only.
+
 ## [0.8.1] - 2026-07-17
 
 ### Added

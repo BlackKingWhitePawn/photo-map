@@ -8,10 +8,13 @@
 * Fixed overlay markers while moving the map: markers reproject to the current camera, while full cluster recalculation waits until camera idle.
 * Added a dense overlay compaction pass so nearby marker groups are merged into larger screen clusters.
 * Rendered single-photo map markers as rounded square thumbnails instead of circles.
+* Updated EXIF scan flow so saved geotagged batches appear on the map during scanning and cancelled scans resume from the last saved mark.
+* Started EXIF GPS scanning immediately after the first gallery permission grant.
 
 ## Scope
 
 This PR focuses on map marker stability, dense marker performance, and same-geotag cluster taps.
+It also keeps long EXIF scans incremental so the map fills while the scanner is still running.
 
 Not included:
 

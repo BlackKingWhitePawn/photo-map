@@ -1,4 +1,4 @@
-# Ветка `hotfix-10-map-marker-reprojection`
+# Branch `fix-11-progressive-exif-scan`
 
 ## Release Target
 
@@ -6,28 +6,28 @@
 v0.7.2
 ```
 
-## Цель
+## Goal
 
-Исправить поведение overlay-маркеров и кластеров на карте после `v0.7.0`: маркеры должны оставаться привязанными к карте во время жестов, плотные наборы маркеров не должны лагать, а кластеры с фотографиями в одной геоточке должны открывать минигалерею без бесконечного приближения.
+Make EXIF scanning feel incremental: photos with GPS coordinates should appear on the map as indexed batches are saved, and a cancelled EXIF scan should resume from the last saved scan mark when started again.
 
-## Границы работ
+## Scope
 
-В ветку входит:
+Included:
 
-* открытие минигалереи по кластеру, если все фотографии кластера находятся в одной геоточке;
-* перепроекция текущих overlay-маркеров во время движения камеры без полной перекластеризации;
-* полный пересчет кластеров только после `camera idle`;
-* дополнительная компактизация близких групп overlay-элементов в крупные экранные кластеры;
-* отображение одиночных фото-маркеров как скруглённых квадратных миниатюр без круговой обрезки;
-* patch-релиз `0.7.2` с обновлением Gradle-версии, changelog, PR и release notes.
+* persist EXIF scan resume progress after saved batches and cancellation;
+* resume an EXIF scan from the previous stable MediaStore position when the gallery order is unchanged;
+* start the EXIF GPS scan immediately after the first gallery permission grant;
+* keep existing indexed photos in the final scan result instead of replacing the UI with only the current scan suffix;
+* refresh map clusters from saved scan batches so newly found geotagged photos appear before the full gallery scan finishes;
+* update `v0.7.2` changelog, PR notes, and release notes.
 
-В ветку не входит:
+Not included:
 
-* запуск сборки Codex-ом;
-* запуск тестов, lint, tsc, eslint или npx;
-* изменение или удаление оригинальных фотографий;
-* отправка фотографий, координат или EXIF наружу.
+* running Gradle build, compile, lint, tests, `npx`, `tsc`, or `eslint`;
+* changing APK version metadata;
+* changing or deleting original user photos;
+* sending photos, coordinates, EXIF, or identifiers outside the device.
 
-## Проверки
+## Checks
 
-Сборку выполняет пользователь вручную. Codex не запускает build/compile/test после патча.
+Codex does not run build/compile/test commands for this patch per the local project rule.

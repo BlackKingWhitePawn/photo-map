@@ -2,6 +2,7 @@ package com.example.photomap.ui.permissions
 
 import android.app.Application
 import android.content.Context
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.photomap.core.permissions.PhotoPermissionManager
@@ -67,6 +68,8 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private var loadedClusterLevel: Int? = null
     private var lastViewportBounds: PhotoMapBounds? = null
     private var lastViewportZoom: Double? = null
+    private var lastProgressiveClusterRefreshAt = 0L
+    private var scanExifAfterPermissionGrant = false
 
     private val _uiState = MutableStateFlow(
         PhotoAccessUiState(
@@ -83,6 +86,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun onPermissionsRequested() {
+        scanExifAfterPermissionGrant = !uiState.value.permissionStatus.canReadImages
         _uiState.update { state ->
             state.copy(hasRequestedPermissions = true)
         }
@@ -102,7 +106,11 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         if (scanWhenAllowed && status.canReadImages) {
-            scanPhotos()
+            val shouldReadExifLocation = scanExifAfterPermissionGrant
+            scanExifAfterPermissionGrant = false
+            scanPhotos(readExifLocation = shouldReadExifLocation)
+        } else if (scanWhenAllowed) {
+            scanExifAfterPermissionGrant = false
         }
     }
 
@@ -126,6 +134,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         scanPauseState.value = false
+        lastProgressiveClusterRefreshAt = 0L
         scanJob = viewModelScope.launch {
             _uiState.update { state ->
                 state.copy(
@@ -410,13 +419,29 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
+        var mergedPhotos = emptyList<DevicePhoto>()
         _uiState.update { state ->
             val photos = (state.photos + batch).distinctByNewestRevision()
+            mergedPhotos = photos
             state.copy(
                 photos = photos,
                 photosWithLocationCount = photos.count { photo -> photo.hasLocation }
             )
         }
+
+        if (batch.any { photo -> photo.hasLocation }) {
+            refreshClustersForProgressiveScan(mergedPhotos)
+        }
+    }
+
+    private fun refreshClustersForProgressiveScan(photos: List<DevicePhoto>) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastProgressiveClusterRefreshAt < ProgressiveClusterRefreshIntervalMs) {
+            return
+        }
+
+        lastProgressiveClusterRefreshAt = now
+        rebuildClusters(photos)
     }
 
     private fun rebuildClusters(photos: List<DevicePhoto> = uiState.value.photos) {
@@ -467,6 +492,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         const val MaxVisibleThumbnailsKey = "max_visible_thumbnails"
         const val ThumbnailPreloadPaddingPxKey = "thumbnail_preload_padding_px"
         const val MapDebugPanelKey = "map_debug_panel"
+        const val ProgressiveClusterRefreshIntervalMs = 750L
     }
 
     private fun readMapDebugPanelVisible(): Boolean {

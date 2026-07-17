@@ -8,6 +8,24 @@
 
 Изменений пока нет.
 
+## [0.11.0] - 2026-07-18
+
+### Added
+
+* Added a new `home` start screen with a vertically scrolling personal geography dashboard.
+* Added a compact trip heatmap preview at the top of the home screen using the existing MapLibre heatmap layer and ready heat cells.
+* Added a featured trips carousel with cover photos, date ranges, and trip photo counts.
+* Added popular places cards derived from already indexed local photos with coordinates.
+* Added an all-places screen and a place detail screen with mini-galleries grouped by day.
+* Added an "On this day in the past" home block with a dedicated map preview and photo thumbnails.
+* Added reusable `MiniPhotoGallery` and `MiniPhotoThumbnail` components for shared mini-gallery UI.
+
+### Changed
+
+* App navigation now starts at the home screen; the full photo map remains available as a separate route.
+* Permission success navigation now returns to the home screen instead of opening the full map directly.
+* Android app metadata is now `versionName=0.11.0`, `versionCode=17`.
+
 ## [0.10.0] - 2026-07-18
 
 ### Added

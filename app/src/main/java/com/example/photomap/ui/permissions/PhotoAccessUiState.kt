@@ -6,6 +6,7 @@ import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.cluster.VisiblePhotoMapItem
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
+import com.example.photomap.domain.trip.TripMapMarker
 
 data class PhotoAccessUiState(
     val permissionStatus: PhotoPermissionStatus = PhotoPermissionStatus(
@@ -19,6 +20,9 @@ data class PhotoAccessUiState(
     val indexedPhotoCount: Int = 0,
     val visibleMapItems: List<VisiblePhotoMapItem> = emptyList(),
     val visibleMapLevel: Int = 0,
+    val tripMarkers: List<TripMapMarker> = emptyList(),
+    val tripPhotoIdsByTripId: Map<Long, List<Long>> = emptyMap(),
+    val isTripSegmentationRunning: Boolean = false,
     val isLoading: Boolean = false,
     val isScanPaused: Boolean = false,
     val loadingMessage: String? = null,

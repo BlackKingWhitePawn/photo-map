@@ -12,6 +12,10 @@ import com.example.photomap.data.cluster.StoredPhotoCluster
 import com.example.photomap.data.media.PhotoIndexStats
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.matchesPhotoDateFilter
+import com.example.photomap.domain.trip.DetectedTrip
+import com.example.photomap.domain.trip.DetectedTripDestination
+import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.domain.trip.TripType
 
 class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
@@ -44,17 +48,15 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX index_photos_location_scanned ON $PhotosTable($LocationScanned)")
         db.execSQL("CREATE INDEX index_photos_date_taken ON $PhotosTable($DateTaken)")
         db.createClusterTables()
+        db.createTripTables()
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.createClusterTables()
-        } else {
-            db.execSQL("DROP TABLE IF EXISTS $PhotoClusterLinksTable")
-            db.execSQL("DROP TABLE IF EXISTS $PhotoClustersTable")
-            db.execSQL("DROP TABLE IF EXISTS $PhotoClusterMetaTable")
-            db.execSQL("DROP TABLE IF EXISTS $PhotosTable")
-            onCreate(db)
+        }
+        if (oldVersion < 3) {
+            db.createTripTables()
         }
     }
 
@@ -155,6 +157,9 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             idsToDelete.forEach { mediaId ->
                 delete(PhotoClusterLinksTable, "$ClusterPhotoId = ?", arrayOf(mediaId.toString()))
             }
+            idsToDelete.forEach { mediaId ->
+                delete(TripPhotoLinksTable, "$TripPhotoId = ?", arrayOf(mediaId.toString()))
+            }
         }
     }
 
@@ -212,6 +217,78 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
                 SQLiteDatabase.CONFLICT_REPLACE
             )
         }
+    }
+
+    fun replaceTrips(
+        trips: List<DetectedTrip>,
+        updatedAt: Long = System.currentTimeMillis()
+    ) {
+        writableDatabase.withTransaction {
+            delete(TripDestinationsTable, null, null)
+            delete(TripPhotoLinksTable, null, null)
+            delete(TripsTable, null, null)
+
+            trips.forEach { trip ->
+                insertWithOnConflict(
+                    TripsTable,
+                    null,
+                    trip.toTripContentValues(updatedAt),
+                    SQLiteDatabase.CONFLICT_REPLACE
+                )
+                trip.photoIds.forEach { photoId ->
+                    insertWithOnConflict(
+                        TripPhotoLinksTable,
+                        null,
+                        trip.toPhotoLinkContentValues(photoId),
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
+                trip.destinations.forEach { destination ->
+                    insertWithOnConflict(
+                        TripDestinationsTable,
+                        null,
+                        trip.toDestinationContentValues(destination),
+                        SQLiteDatabase.CONFLICT_REPLACE
+                    )
+                }
+            }
+        }
+    }
+
+    fun getTripMapMarkers(): List<TripMapMarker> {
+        val trips = mutableListOf<TripMapMarker>()
+        readableDatabase.query(
+            TripsTable,
+            TripColumns,
+            null,
+            null,
+            null,
+            null,
+            "$TripStartDay DESC, $TripEndDay DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                trips += cursor.toTripMapMarker()
+            }
+        }
+        return trips
+    }
+
+    fun getTripPhotoIds(tripId: Long): List<Long> {
+        val photoIds = mutableListOf<Long>()
+        readableDatabase.query(
+            TripPhotoLinksTable,
+            arrayOf(TripPhotoId),
+            "$TripLinkTripId = ?",
+            arrayOf(tripId.toString()),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                cursor.getLongValue(TripPhotoId)?.let { photoId -> photoIds += photoId }
+            }
+        }
+        return photoIds
     }
 
     fun getClustersInBounds(
@@ -334,6 +411,44 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    private fun DetectedTrip.toTripContentValues(updatedAt: Long): ContentValues {
+        return ContentValues().apply {
+            put(TripId, id)
+            put(TripStartDay, startDay)
+            put(TripEndDay, endDay)
+            put(TripCenterLatitude, centerLatitude)
+            put(TripCenterLongitude, centerLongitude)
+            put(TripRadiusKm, radiusKm)
+            put(TripPhotoCount, photoCount)
+            put(TripActiveDayCount, activeDayCount)
+            put(TripConfidence, confidence)
+            put(TripTypeColumn, type.name)
+            put(TripCoverPhotoId, coverPhotoId)
+            put(TripCreatedAt, updatedAt)
+            put(TripUpdatedAt, updatedAt)
+        }
+    }
+
+    private fun DetectedTrip.toPhotoLinkContentValues(photoId: Long): ContentValues {
+        return ContentValues().apply {
+            put(TripLinkTripId, id)
+            put(TripPhotoId, photoId)
+        }
+    }
+
+    private fun DetectedTrip.toDestinationContentValues(destination: DetectedTripDestination): ContentValues {
+        return ContentValues().apply {
+            put(TripDestinationTripId, id)
+            put(TripDestinationSortOrder, destination.sortOrder)
+            put(TripDestinationCenterLatitude, destination.centerLatitude)
+            put(TripDestinationCenterLongitude, destination.centerLongitude)
+            put(TripDestinationRadiusKm, destination.radiusKm)
+            put(TripDestinationPhotoCount, destination.photoCount)
+            put(TripDestinationFirstDay, destination.firstDay)
+            put(TripDestinationLastDay, destination.lastDay)
+        }
+    }
+
     private fun Cursor.toIndexedPhoto(): IndexedPhoto {
         return IndexedPhoto(
             mediaId = getLongValue(MediaId) ?: error("Indexed photo without media id"),
@@ -371,6 +486,24 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             coverPhotoId = getLongValue(ClusterCoverPhotoId),
             updatedAt = getLongValue(ClusterUpdatedAt) ?: 0L,
             version = getIntNullableValue(ClusterVersion) ?: 0
+        )
+    }
+
+    private fun Cursor.toTripMapMarker(): TripMapMarker {
+        return TripMapMarker(
+            tripId = getLongValue(TripId) ?: error("Stored trip without id"),
+            coverPhotoId = getLongValue(TripCoverPhotoId),
+            latitude = getDoubleValue(TripCenterLatitude) ?: 0.0,
+            longitude = getDoubleValue(TripCenterLongitude) ?: 0.0,
+            radiusKm = getDoubleValue(TripRadiusKm),
+            photoCount = getIntNullableValue(TripPhotoCount) ?: 0,
+            activeDayCount = getIntNullableValue(TripActiveDayCount) ?: 0,
+            startDay = getLongValue(TripStartDay) ?: 0L,
+            endDay = getLongValue(TripEndDay) ?: 0L,
+            confidence = getDoubleValue(TripConfidence) ?: 0.0,
+            type = getStringValue(TripTypeColumn)?.let { value ->
+                runCatching { TripType.valueOf(value) }.getOrNull()
+            } ?: TripType.UNKNOWN
         )
     }
 
@@ -459,14 +592,67 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         execSQL("CREATE INDEX IF NOT EXISTS index_cluster_links_cluster ON $PhotoClusterLinksTable($ClusterLinkClusterId)")
     }
 
+    private fun SQLiteDatabase.createTripTables() {
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripsTable (
+                $TripId INTEGER PRIMARY KEY NOT NULL,
+                $TripStartDay INTEGER NOT NULL,
+                $TripEndDay INTEGER NOT NULL,
+                $TripCenterLatitude REAL NOT NULL,
+                $TripCenterLongitude REAL NOT NULL,
+                $TripRadiusKm REAL,
+                $TripPhotoCount INTEGER NOT NULL,
+                $TripActiveDayCount INTEGER NOT NULL,
+                $TripConfidence REAL NOT NULL,
+                $TripTypeColumn TEXT NOT NULL,
+                $TripCoverPhotoId INTEGER,
+                $TripCreatedAt INTEGER NOT NULL,
+                $TripUpdatedAt INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripPhotoLinksTable (
+                $TripLinkTripId INTEGER NOT NULL,
+                $TripPhotoId INTEGER NOT NULL,
+                PRIMARY KEY ($TripLinkTripId, $TripPhotoId)
+            )
+            """.trimIndent()
+        )
+        execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $TripDestinationsTable (
+                $TripDestinationId INTEGER PRIMARY KEY AUTOINCREMENT,
+                $TripDestinationTripId INTEGER NOT NULL,
+                $TripDestinationSortOrder INTEGER NOT NULL,
+                $TripDestinationCenterLatitude REAL NOT NULL,
+                $TripDestinationCenterLongitude REAL NOT NULL,
+                $TripDestinationRadiusKm REAL,
+                $TripDestinationPhotoCount INTEGER NOT NULL,
+                $TripDestinationFirstDay INTEGER NOT NULL,
+                $TripDestinationLastDay INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        execSQL("CREATE INDEX IF NOT EXISTS index_trips_dates ON $TripsTable($TripStartDay, $TripEndDay)")
+        execSQL("CREATE INDEX IF NOT EXISTS index_trip_photo_links_trip ON $TripPhotoLinksTable($TripLinkTripId)")
+        execSQL("CREATE INDEX IF NOT EXISTS index_trip_photo_links_photo ON $TripPhotoLinksTable($TripPhotoId)")
+        execSQL("CREATE INDEX IF NOT EXISTS index_trip_destinations_trip ON $TripDestinationsTable($TripDestinationTripId)")
+    }
+
     companion object {
         private const val DatabaseName = "photo_index.db"
-        private const val DatabaseVersion = 2
+        private const val DatabaseVersion = 3
 
         private const val PhotosTable = "photos"
         private const val PhotoClustersTable = "photo_clusters"
         private const val PhotoClusterLinksTable = "photo_cluster_links"
         private const val PhotoClusterMetaTable = "photo_cluster_meta"
+        private const val TripsTable = "trips"
+        private const val TripPhotoLinksTable = "trip_photo_links"
+        private const val TripDestinationsTable = "trip_destinations"
         private const val MediaId = "media_id"
         private const val Uri = "uri"
         private const val DisplayName = "display_name"
@@ -506,6 +692,33 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         private const val ClusterMetaValue = "value"
         private const val ClusterMetaVersionKey = "cluster_version"
 
+        private const val TripId = "id"
+        private const val TripStartDay = "start_day"
+        private const val TripEndDay = "end_day"
+        private const val TripCenterLatitude = "center_latitude"
+        private const val TripCenterLongitude = "center_longitude"
+        private const val TripRadiusKm = "radius_km"
+        private const val TripPhotoCount = "photo_count"
+        private const val TripActiveDayCount = "active_day_count"
+        private const val TripConfidence = "confidence"
+        private const val TripTypeColumn = "type"
+        private const val TripCoverPhotoId = "cover_photo_id"
+        private const val TripCreatedAt = "created_at"
+        private const val TripUpdatedAt = "updated_at"
+
+        private const val TripLinkTripId = "trip_id"
+        private const val TripPhotoId = "photo_id"
+
+        private const val TripDestinationId = "id"
+        private const val TripDestinationTripId = "trip_id"
+        private const val TripDestinationSortOrder = "sort_order"
+        private const val TripDestinationCenterLatitude = "center_latitude"
+        private const val TripDestinationCenterLongitude = "center_longitude"
+        private const val TripDestinationRadiusKm = "radius_km"
+        private const val TripDestinationPhotoCount = "photo_count"
+        private const val TripDestinationFirstDay = "first_day"
+        private const val TripDestinationLastDay = "last_day"
+
         private val Columns = arrayOf(
             MediaId,
             Uri,
@@ -540,6 +753,22 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             ClusterCoverPhotoId,
             ClusterUpdatedAt,
             ClusterVersion
+        )
+
+        private val TripColumns = arrayOf(
+            TripId,
+            TripStartDay,
+            TripEndDay,
+            TripCenterLatitude,
+            TripCenterLongitude,
+            TripRadiusKm,
+            TripPhotoCount,
+            TripActiveDayCount,
+            TripConfidence,
+            TripTypeColumn,
+            TripCoverPhotoId,
+            TripCreatedAt,
+            TripUpdatedAt
         )
     }
 }

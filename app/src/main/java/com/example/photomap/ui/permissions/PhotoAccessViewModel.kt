@@ -48,6 +48,7 @@ import com.example.photomap.data.cluster.clusterLevelForZoom
 import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
 import com.example.photomap.data.media.PhotoReadControl
+import com.example.photomap.data.trip.TripStore
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.buildPhotoDateFilter
@@ -63,11 +64,13 @@ import kotlinx.coroutines.launch
 class PhotoAccessViewModel(application: Application) : AndroidViewModel(application) {
     private val photoReader: DevicePhotoReader = AndroidMediaStorePhotoReader(application)
     private val clusterStore = PhotoClusterStore(application)
+    private val tripStore = TripStore(application)
     private val settings = application.getSharedPreferences(SettingsName, Context.MODE_PRIVATE)
     private val scanPauseState = MutableStateFlow(false)
     private var scanJob: Job? = null
     private var clusterRebuildJob: Job? = null
     private var visibleMapLoadJob: Job? = null
+    private var tripSegmentationJob: Job? = null
     private var clusterGeneration = 0L
     private var viewportLoadGeneration = 0L
     private var loadedClusterBounds: PhotoMapBounds? = null
@@ -88,6 +91,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         refreshIndexedPhotos()
+        refreshTripMarkers()
         refreshPermissions(scanWhenAllowed = true)
     }
 
@@ -195,6 +199,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                     )
                 }
                 rebuildClusters(photos = photos, dateFilter = dateFilter)
+                rebuildTrips(photos = photos)
             } catch (cancellationException: CancellationException) {
                 _uiState.update { state ->
                     state.copy(
@@ -412,7 +417,8 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
 
         val requestedLevel = clusterLevelForZoom(zoom)
         val currentLoadedBounds = loadedClusterBounds
-        if (loadedClusterLevel == requestedLevel && currentLoadedBounds?.contains(bounds) == true) {
+        val hasVisibleItems = uiState.value.visibleMapItems.isNotEmpty()
+        if (hasVisibleItems && loadedClusterLevel == requestedLevel && currentLoadedBounds?.contains(bounds) == true) {
             return
         }
 
@@ -442,6 +448,47 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun rebuildTrips(photos: List<DevicePhoto> = uiState.value.photos) {
+        if (tripSegmentationJob?.isActive == true) {
+            return
+        }
+
+        tripSegmentationJob = viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    isTripSegmentationRunning = true,
+                    errorMessage = null
+                )
+            }
+            try {
+                val markers = tripStore.rebuildTrips(photos)
+                val photoIdsByTripId = tripStore.getTripPhotoIdsByTripIds(
+                    tripIds = markers.map { marker -> marker.tripId }
+                )
+                _uiState.update { state ->
+                    state.copy(
+                        tripMarkers = markers,
+                        tripPhotoIdsByTripId = photoIdsByTripId,
+                        isTripSegmentationRunning = false
+                    )
+                }
+            } catch (cancellationException: CancellationException) {
+                _uiState.update { state ->
+                    state.copy(isTripSegmentationRunning = false)
+                }
+            } catch (exception: RuntimeException) {
+                _uiState.update { state ->
+                    state.copy(
+                        isTripSegmentationRunning = false,
+                        errorMessage = "Не удалось пересчитать поездки"
+                    )
+                }
+            } finally {
+                tripSegmentationJob = null
+            }
+        }
+    }
+
     private fun refreshIndexedPhotos() {
         viewModelScope.launch {
             val photos = photoReader.readIndexedPhotos()
@@ -457,6 +504,22 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 )
             }
             rebuildClusters(photos = photos, dateFilter = dateFilter)
+            rebuildTrips(photos = photos)
+        }
+    }
+
+    private fun refreshTripMarkers() {
+        viewModelScope.launch {
+            val markers = tripStore.loadTripMarkers()
+            val photoIdsByTripId = tripStore.getTripPhotoIdsByTripIds(
+                tripIds = markers.map { marker -> marker.tripId }
+            )
+            _uiState.update { state ->
+                state.copy(
+                    tripMarkers = markers,
+                    tripPhotoIdsByTripId = photoIdsByTripId
+                )
+            }
         }
     }
 

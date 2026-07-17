@@ -145,6 +145,7 @@ fun PhotoMapScreen(
     onResume: () -> Unit,
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenTrips: () -> Unit,
     onClusterDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
@@ -190,6 +191,7 @@ fun PhotoMapScreen(
                         onClusterDensityChanged = onClusterDensityChanged,
                         onDateFilterChanged = onDateFilterChanged,
                         onDateFilterReset = onDateFilterReset,
+                        onOpenTrips = onOpenTrips,
                         onViewportChanged = onViewportChanged
                     )
 
@@ -345,6 +347,7 @@ private fun PhotoMapLibreMap(
     onClusterDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
+    onOpenTrips: () -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val context = LocalContext.current
@@ -427,7 +430,9 @@ private fun PhotoMapLibreMap(
                     isStyleReady = true
                     styleGeneration += 1
                     thumbnailRefreshKey += 1
-                    mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    post {
+                        mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    }
                 }
             }
         }
@@ -437,7 +442,12 @@ private fun PhotoMapLibreMap(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    mapView.onResume()
+                    mapView.post {
+                        map?.dispatchViewportChanged(latestOnViewportChanged.value)
+                    }
+                }
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 Lifecycle.Event.ON_STOP -> mapView.onStop()
                 else -> Unit
@@ -522,9 +532,25 @@ private fun PhotoMapLibreMap(
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
                 hasFitCamera = true
+                mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                mapView.postDelayed(
+                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    MapViewportRefreshDelayMs
+                )
             }.onFailure { error ->
                 Log.e(PhotoMapLogTag, "Initial camera fit failed", error)
             }
+        }
+    }
+
+    LaunchedEffect(map, isStyleReady, photosById.size, dateFilter, clusterSettings) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady) {
+            return@LaunchedEffect
+        }
+
+        mapView.post {
+            mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
         }
     }
 
@@ -537,6 +563,11 @@ private fun PhotoMapLibreMap(
         mapView.post {
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+                mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                mapView.postDelayed(
+                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    MapViewportRefreshDelayMs
+                )
             }.onFailure { error ->
                 Log.e(PhotoMapLogTag, "Manual camera fit failed", error)
             }
@@ -595,7 +626,8 @@ private fun PhotoMapLibreMap(
                 dateFilter = dateFilter,
                 onDensityChanged = onClusterDensityChanged,
                 onDateFilterChanged = onDateFilterChanged,
-                onDateFilterReset = onDateFilterReset
+                onDateFilterReset = onDateFilterReset,
+                onOpenTrips = onOpenTrips
             )
         }
     }
@@ -911,6 +943,7 @@ private fun MapFabControls(
     onDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
+    onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedPanel by remember { mutableStateOf<MapFabPanel?>(null) }
@@ -968,6 +1001,19 @@ private fun MapFabControls(
                         )
                         Text(
                             text = "${clusterSettings.densityCoefficientPercent}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                FloatingActionButton(onClick = onOpenTrips) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Поездки",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Medium
                         )
@@ -3295,6 +3341,7 @@ private data class BottomGalleryZoomTarget(
 )
 
 private const val MapBoundsPaddingPx = 120
+private const val MapViewportRefreshDelayMs = 350L
 private const val InitialSinglePhotoZoom = 14.0
 private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160

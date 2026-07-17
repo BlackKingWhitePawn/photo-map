@@ -14,6 +14,8 @@ val localProperties = Properties().apply {
 
 val mapStyleUrl = localProperties.getProperty("MAP_STYLE_URL")
     ?: "https://tiles.openfreemap.org/styles/liberty"
+val tripMapStyleUrl = localProperties.getProperty("TRIP_MAP_STYLE_URL")
+    ?: "https://tiles.openfreemap.org/styles/dark"
 
 android {
     namespace = "com.example.photomap"
@@ -25,11 +27,12 @@ android {
         applicationId = "com.example.photomap"
         minSdk = 29
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.8.2"
+        versionCode = 15
+        versionName = "0.9.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "TRIP_MAP_STYLE_URL", "\"${tripMapStyleUrl.replace("\"", "\\\"")}\"")
     }
 
     buildTypes {
@@ -61,6 +64,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.exifinterface)
     implementation(libs.maplibre.android.sdk)
     testImplementation(libs.junit)

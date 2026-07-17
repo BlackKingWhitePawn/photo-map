@@ -8,6 +8,15 @@
 
 Изменений пока нет.
 
+## [0.7.2] - 2026-07-17
+
+### Fixed
+
+* Fixed clusters whose photos share the same geotag so tapping them opens the mini gallery instead of endlessly zooming.
+* Fixed overlay markers during map movement: marker positions now reproject while the camera moves, but cluster composition is recalculated only after camera idle.
+* Fixed map lag and visual clutter by compacting nearby dense marker groups into larger screen clusters.
+* Fixed single-photo map markers so square thumbnails are no longer clipped by a circular marker shape.
+
 ## [0.7.0] - 2026-07-16
 
 ### Added

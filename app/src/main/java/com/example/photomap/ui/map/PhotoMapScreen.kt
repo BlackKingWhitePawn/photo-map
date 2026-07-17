@@ -26,6 +26,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -548,22 +549,17 @@ private fun PhotoMapLibreMap(
     LaunchedEffect(
         map,
         isStyleReady,
-        styleGeneration,
-        cameraMoveRevision,
-        mapItems,
-        clusterSettings
+        cameraMoveRevision
     ) {
         val mapLibreMap = map ?: return@LaunchedEffect
-        if (!isStyleReady || mapView.width <= 0 || mapView.height <= 0) {
+        if (!isStyleReady || mapView.width <= 0 || mapView.height <= 0 || mapRenderState.items.isEmpty()) {
             return@LaunchedEffect
         }
 
-        mapRenderState = mapLibreMap.buildPhotoMapRenderState(
-            mapItems = mapItems,
-            photosById = photosById,
+        mapRenderState = mapLibreMap.reprojectPhotoMapRenderState(
+            renderState = mapRenderState,
             width = mapView.width,
-            height = mapView.height,
-            settings = clusterSettings
+            height = mapView.height
         )
     }
 
@@ -826,8 +822,8 @@ private fun MapPhotoMarker(
     }
     Surface(
         modifier = modifier.clickable(onClick = onClick),
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary,
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface),
         shadowElevation = 4.dp
     ) {
@@ -1211,16 +1207,25 @@ private fun MapLibreMap.handlePhotoMapRenderItemTap(
 ): Boolean {
     if (renderItem.isCluster) {
         val nextZoom = (cameraPosition.zoom + ClusterTapZoomStep).coerceAtMost(ClusterTapMaxZoom)
-        if (forceShowClusterGallery || renderItem.photoCount >= LargeClusterGalleryThreshold) {
-            bottomGalleryStateForRenderItem(
-                renderItem = renderItem,
-                photosById = photosById,
-                zoomTarget = BottomGalleryZoomTarget(
-                    latitude = renderItem.latitude,
-                    longitude = renderItem.longitude,
-                    zoom = nextZoom
-                )
-            )?.let(onShowPhotos)
+        val galleryState = bottomGalleryStateForRenderItem(
+            renderItem = renderItem,
+            photosById = photosById,
+            zoomTarget = BottomGalleryZoomTarget(
+                latitude = renderItem.latitude,
+                longitude = renderItem.longitude,
+                zoom = nextZoom
+            )
+        )
+        val isSingleGeoPointCluster = galleryState?.hasSingleGeoPoint() == true
+        if (forceShowClusterGallery || renderItem.photoCount >= LargeClusterGalleryThreshold || isSingleGeoPointCluster) {
+            galleryState?.let(onShowPhotos)
+        }
+        if (isSingleGeoPointCluster) {
+            AppDiagnostics.record(
+                PhotoMapLogTag,
+                "Open same-location cluster gallery: id=${renderItem.id}, photos=${renderItem.photoCount}"
+            )
+            return true
         }
         animateCamera(
             CameraUpdateFactory.newLatLngZoom(
@@ -1359,6 +1364,25 @@ private fun bottomGalleryStateForPhotoIds(
     )
 }
 
+private fun BottomGalleryState.hasSingleGeoPoint(): Boolean {
+    if (photos.size < 2) {
+        return false
+    }
+    val points = photos.mapNotNull { photo -> photo.toMapPoint() }
+    if (points.size != photos.size) {
+        return false
+    }
+    val firstPoint = points.first()
+    return points.drop(1).all { point ->
+        haversineDistanceKm(
+            firstLatitude = firstPoint.latitude,
+            firstLongitude = firstPoint.longitude,
+            secondLatitude = point.latitude,
+            secondLongitude = point.longitude
+        ) <= SameGeoPointClusterDistanceKm
+    }
+}
+
 private fun bottomGalleryStateForRenderItem(
     renderItem: PhotoMapRenderItem,
     photosById: Map<Long, DevicePhoto>,
@@ -1447,10 +1471,17 @@ private fun MapLibreMap.buildPhotoMapRenderState(
                 centerY = centerY
             )
         }
-        val clusterFeatures = projectedItems
+        val renderItems = compactDenseRenderItems(
+            items = projectedItems,
+            width = width,
+            height = height,
+            centerX = centerX,
+            centerY = centerY
+        )
+        val clusterFeatures = renderItems
             .filter { item -> item.isCluster }
             .map { item -> item.toClusterFeature() }
-        val clusterThumbnailRequests = projectedItems
+        val clusterThumbnailRequests = renderItems
             .filter { item -> item.isCluster }
             .mapNotNull { item ->
                 val representativePhotoId = item.representativePhotoId ?: return@mapNotNull null
@@ -1461,14 +1492,14 @@ private fun MapLibreMap.buildPhotoMapRenderState(
                 )
             }
         val thumbnailPhotoIds = visibleThumbnailPhotoIds(
-            items = projectedItems,
+            items = renderItems,
             width = width,
             height = height,
             settings = settings
         )
 
         PhotoMapRenderState(
-            items = projectedItems,
+            items = renderItems,
             thumbnailPhotoIds = thumbnailPhotoIds,
             clusterThumbnailRequests = clusterThumbnailRequests,
             clusterFeatureCollection = FeatureCollection.fromFeatures(clusterFeatures),
@@ -1480,6 +1511,167 @@ private fun MapLibreMap.buildPhotoMapRenderState(
     }.onFailure { error ->
         Log.w(PhotoMapLogTag, "Failed to build photo map render state", error)
     }.getOrDefault(PhotoMapRenderState.Empty)
+}
+
+private fun MapLibreMap.reprojectPhotoMapRenderState(
+    renderState: PhotoMapRenderState,
+    width: Int,
+    height: Int
+): PhotoMapRenderState {
+    if (width <= 0 || height <= 0 || renderState.items.isEmpty()) {
+        return renderState
+    }
+    val centerX = width / 2f
+    val centerY = height / 2f
+    val reprojectedItems = renderState.items.map { item ->
+        val screenPoint = projection.toScreenLocation(LatLng(item.latitude, item.longitude))
+        item.copy(
+            screenX = screenPoint.x,
+            screenY = screenPoint.y
+        ).withDistanceFromCenter(centerX, centerY)
+    }
+    return renderState.copy(
+        items = reprojectedItems,
+        viewportWidth = width,
+        viewportHeight = height
+    )
+}
+
+private fun compactDenseRenderItems(
+    items: List<PhotoMapRenderItem>,
+    width: Int,
+    height: Int,
+    centerX: Float,
+    centerY: Float
+): List<PhotoMapRenderItem> {
+    if (width <= 0 || height <= 0 || items.size < DenseRenderMinClusterItems) {
+        return items
+    }
+
+    val radiusPx = DenseRenderClusterRadiusPx.coerceAtLeast(1f)
+    val clusters = mutableListOf<MutableRenderItemCluster>()
+    val clustersByCell = mutableMapOf<ScreenGridCell, MutableList<MutableRenderItemCluster>>()
+    items.sortedBy { item -> item.distanceFromCenter }.forEach { item ->
+        val cell = item.screenCell(radiusPx)
+        val targetCluster = cell.neighbors()
+            .asSequence()
+            .flatMap { neighbor -> clustersByCell[neighbor].orEmpty().asSequence() }
+            .distinct()
+            .filter { cluster -> cluster.screenDistanceSquaredTo(item) <= radiusPx * radiusPx }
+            .minByOrNull { cluster -> cluster.screenDistanceSquaredTo(item) }
+
+        if (targetCluster == null) {
+            val cluster = MutableRenderItemCluster(item, cell)
+            clusters += cluster
+            clustersByCell.getOrPut(cell) { mutableListOf() }.add(cluster)
+        } else {
+            val previousCell = targetCluster.cell
+            targetCluster.add(item)
+            val nextCell = targetCluster.screenCell(radiusPx)
+            if (nextCell != previousCell) {
+                clustersByCell[previousCell]?.remove(targetCluster)
+                clustersByCell.getOrPut(nextCell) { mutableListOf() }.add(targetCluster)
+                targetCluster.cell = nextCell
+            }
+        }
+    }
+
+    return clusters.flatMapIndexed { index, cluster ->
+        if (cluster.shouldMerge) {
+            listOf(cluster.toRenderItem(index = index, centerX = centerX, centerY = centerY))
+        } else {
+            cluster.items
+        }
+    }.sortedBy { item -> item.distanceFromCenter }
+}
+
+private class MutableRenderItemCluster(
+    firstItem: PhotoMapRenderItem,
+    var cell: ScreenGridCell
+) {
+    private val mutableItems = mutableListOf(firstItem)
+    var screenX: Float = firstItem.screenX
+        private set
+    var screenY: Float = firstItem.screenY
+        private set
+
+    val items: List<PhotoMapRenderItem>
+        get() = mutableItems
+
+    val shouldMerge: Boolean
+        get() = mutableItems.size >= DenseRenderMinItemsPerCluster ||
+            mutableItems.count { item -> item.isCluster } >= DenseRenderMinClusterItems
+
+    fun add(item: PhotoMapRenderItem) {
+        mutableItems += item
+        val totalWeight = mutableItems.sumOf { renderItem -> renderItem.photoCount.coerceAtLeast(1) }
+            .toDouble()
+            .coerceAtLeast(1.0)
+        screenX = (
+            mutableItems.sumOf { renderItem ->
+                renderItem.screenX.toDouble() * renderItem.photoCount.coerceAtLeast(1)
+            } / totalWeight
+            ).toFloat()
+        screenY = (
+            mutableItems.sumOf { renderItem ->
+                renderItem.screenY.toDouble() * renderItem.photoCount.coerceAtLeast(1)
+            } / totalWeight
+            ).toFloat()
+    }
+
+    fun screenDistanceSquaredTo(item: PhotoMapRenderItem): Float {
+        val dx = item.screenX - screenX
+        val dy = item.screenY - screenY
+        return dx * dx + dy * dy
+    }
+
+    fun screenCell(cellSize: Float): ScreenGridCell {
+        return ScreenGridCell(
+            x = floor(screenX / cellSize).toInt(),
+            y = floor(screenY / cellSize).toInt()
+        )
+    }
+
+    fun toRenderItem(index: Int, centerX: Float, centerY: Float): PhotoMapRenderItem {
+        return mutableItems.toDenseRenderCluster(index = index, centerX = centerX, centerY = centerY)
+    }
+}
+
+private fun List<PhotoMapRenderItem>.toDenseRenderCluster(
+    index: Int,
+    centerX: Float,
+    centerY: Float
+): PhotoMapRenderItem {
+    val canUseExactPhotoIds = all { item -> item.photoIds.isNotEmpty() || item.photoCount <= 1 }
+    val mergedPhotoIds = if (canUseExactPhotoIds) {
+        flatMap { item -> item.tappablePhotoIds }.distinct()
+    } else {
+        emptyList()
+    }
+    val mergedPhotoCount = mergedPhotoIds.size.takeIf { count -> count > 0 } ?: sumOf { item -> item.photoCount }
+    val totalWeight = sumOf { item -> item.photoCount.coerceAtLeast(1) }.toDouble().coerceAtLeast(1.0)
+    val weightedLatitude = sumOf { item -> item.latitude * item.photoCount.coerceAtLeast(1) } / totalWeight
+    val weightedLongitude = sumOf { item -> item.longitude * item.photoCount.coerceAtLeast(1) } / totalWeight
+    val weightedScreenX = (sumOf { item -> item.screenX.toDouble() * item.photoCount.coerceAtLeast(1) } / totalWeight).toFloat()
+    val weightedScreenY = (sumOf { item -> item.screenY.toDouble() * item.photoCount.coerceAtLeast(1) } / totalWeight).toFloat()
+    val representativeItem = minByOrNull { item -> item.distanceFromCenter } ?: first()
+
+    return PhotoMapRenderItem(
+        id = "dense-$index-${representativeItem.id}",
+        level = maxOf { item -> item.level },
+        latitude = weightedLatitude,
+        longitude = weightedLongitude,
+        photoCount = mergedPhotoCount,
+        priorityScore = sumOf { item -> item.priorityScore },
+        minLatitude = minOf { item -> item.minLatitude },
+        maxLatitude = maxOf { item -> item.maxLatitude },
+        minLongitude = minOf { item -> item.minLongitude },
+        maxLongitude = maxOf { item -> item.maxLongitude },
+        coverPhotoId = representativeItem.representativePhotoId,
+        screenX = weightedScreenX,
+        screenY = weightedScreenY,
+        photoIds = mergedPhotoIds
+    ).withDistanceFromCenter(centerX, centerY)
 }
 
 private fun MapLibreMap.projectVisibleMapPhotos(
@@ -2384,9 +2576,13 @@ private const val MapThumbnailInnerCornerRadiusPx = 10f
 private const val MaxCachedMapThumbnailImages = 360
 private const val MaxThumbnailImagesPerPass = 32
 private const val MaxClusterThumbnailImagesPerPass = 24
+private const val DenseRenderClusterRadiusPx = 118f
+private const val DenseRenderMinItemsPerCluster = 3
+private const val DenseRenderMinClusterItems = 2
 private const val ClusterTapZoomStep = 2.0
 private const val ClusterTapMaxZoom = 20.0
 private const val LargeClusterGalleryThreshold = 50
+private const val SameGeoPointClusterDistanceKm = 0.001
 private const val ClusterThumbnailBlurSamplePx = 16
 private const val CityWideClusterZoom = 11.0
 private const val DistrictClusterZoom = 12.5

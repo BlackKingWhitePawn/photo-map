@@ -1,17 +1,17 @@
-# PR: Map controls and v0.7.0 release prep
+# PR: Map marker reprojection hotfix
 
 ## Summary
 
-* Prepared release metadata for `v0.7.0`.
-* Bumped Android version to `versionName=0.7.0`, `versionCode=9`.
-* Made the map debug panel hidden by default for new installs.
-* Polished map top-bar controls, safe-area handling, settings icon usage, and mini gallery controls.
-* Added an animated cluster-density FAB that shows the current density percent and expands into a full-width slider.
-* Updated visible map clustering so density affects the runtime marker layer and cluster labels use real photo IDs when available.
+* Prepared patch release metadata for `v0.7.2`.
+* Bumped Android version to `versionName=0.7.2`, `versionCode=11`.
+* Fixed same-location clusters so tapping them opens the mini gallery instead of endlessly zooming into one point.
+* Fixed overlay markers while moving the map: markers reproject to the current camera, while full cluster recalculation waits until camera idle.
+* Added a dense overlay compaction pass so nearby marker groups are merged into larger screen clusters.
+* Rendered single-photo map markers as rounded square thumbnails instead of circles.
 
 ## Scope
 
-This PR focuses on map UX, cluster-density behavior, debug-panel defaults, and release preparation.
+This PR focuses on map marker stability, dense marker performance, and same-geotag cluster taps.
 
 Not included:
 
@@ -24,11 +24,11 @@ Not included:
 
 ## Checks
 
-* Release APK prepared: `app/release/photomap-v0.7.0.apk`.
-* APK metadata inspected with `aapt2 dump badging`: `versionCode=9`, `versionName=0.7.0`.
+* Release APK prepared: `app/release/photomap-v0.7.2.apk`.
+* APK metadata inspected with `aapt2 dump badging`: `versionCode=11`, `versionName=0.7.2`.
 * APK permissions inspected with `aapt2 dump permissions`.
 * APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
-* Build and test commands were not run by Codex for this release prep, per the local project rule.
+* Build and test commands were not run by Codex for this patch, per the local project rule.
 
 ## Safety
 
@@ -37,30 +37,30 @@ The app remains read-only for user photos:
 * no MediaStore delete/trash/write requests;
 * no EXIF mutation;
 * no upload of photos, coordinates, EXIF, or file identifiers;
-* cluster and debug data stay local to the device.
+* cluster and map data stay local to the device.
 
 ## Release
 
 Target release:
 
 ```text
-v0.7.0
+v0.7.2
 ```
 
 Release notes:
 
 ```text
-release-notes/v0.7.0.md
+release-notes/v0.7.2.md
 ```
 
 APK asset:
 
 ```text
-app/release/photomap-v0.7.0.apk
+app/release/photomap-v0.7.2.apk
 ```
 
 SHA-256:
 
 ```text
-54EB63B5153BE2A0B9A15A5A5D7C9434EFB29C34749A2C6701E60168630CC4A7
+F2E6DBB97BB143C57F6816820045D3B531B2CD031B7AC206745F42AF61B4F033
 ```

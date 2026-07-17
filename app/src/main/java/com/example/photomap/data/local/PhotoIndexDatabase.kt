@@ -15,6 +15,7 @@ import com.example.photomap.domain.model.matchesPhotoDateFilter
 import com.example.photomap.domain.trip.DetectedTrip
 import com.example.photomap.domain.trip.DetectedTripDestination
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.domain.trip.TripPlaceNames
 import com.example.photomap.domain.trip.TripType
 
 class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
@@ -57,6 +58,8 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
         if (oldVersion < 3) {
             db.createTripTables()
+        } else if (oldVersion < 4) {
+            db.addTripPlaceNameColumns()
         }
     }
 
@@ -221,6 +224,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
 
     fun replaceTrips(
         trips: List<DetectedTrip>,
+        placeNamesByTripId: Map<Long, TripPlaceNames> = emptyMap(),
         updatedAt: Long = System.currentTimeMillis()
     ) {
         writableDatabase.withTransaction {
@@ -232,7 +236,10 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
                 insertWithOnConflict(
                     TripsTable,
                     null,
-                    trip.toTripContentValues(updatedAt),
+                    trip.toTripContentValues(
+                        updatedAt = updatedAt,
+                        placeName = placeNamesByTripId[trip.id]?.title
+                    ),
                     SQLiteDatabase.CONFLICT_REPLACE
                 )
                 trip.photoIds.forEach { photoId ->
@@ -247,7 +254,12 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
                     insertWithOnConflict(
                         TripDestinationsTable,
                         null,
-                        trip.toDestinationContentValues(destination),
+                        trip.toDestinationContentValues(
+                            destination = destination,
+                            placeName = placeNamesByTripId[trip.id]
+                                ?.destinationNamesBySortOrder
+                                ?.get(destination.sortOrder)
+                        ),
                         SQLiteDatabase.CONFLICT_REPLACE
                     )
                 }
@@ -411,7 +423,10 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
-    private fun DetectedTrip.toTripContentValues(updatedAt: Long): ContentValues {
+    private fun DetectedTrip.toTripContentValues(
+        updatedAt: Long,
+        placeName: String?
+    ): ContentValues {
         return ContentValues().apply {
             put(TripId, id)
             put(TripStartDay, startDay)
@@ -424,6 +439,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             put(TripConfidence, confidence)
             put(TripTypeColumn, type.name)
             put(TripCoverPhotoId, coverPhotoId)
+            put(TripPlaceName, placeName)
             put(TripCreatedAt, updatedAt)
             put(TripUpdatedAt, updatedAt)
         }
@@ -436,7 +452,10 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         }
     }
 
-    private fun DetectedTrip.toDestinationContentValues(destination: DetectedTripDestination): ContentValues {
+    private fun DetectedTrip.toDestinationContentValues(
+        destination: DetectedTripDestination,
+        placeName: String?
+    ): ContentValues {
         return ContentValues().apply {
             put(TripDestinationTripId, id)
             put(TripDestinationSortOrder, destination.sortOrder)
@@ -446,6 +465,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             put(TripDestinationPhotoCount, destination.photoCount)
             put(TripDestinationFirstDay, destination.firstDay)
             put(TripDestinationLastDay, destination.lastDay)
+            put(TripDestinationPlaceName, placeName)
         }
     }
 
@@ -500,6 +520,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             activeDayCount = getIntNullableValue(TripActiveDayCount) ?: 0,
             startDay = getLongValue(TripStartDay) ?: 0L,
             endDay = getLongValue(TripEndDay) ?: 0L,
+            placeName = getStringValue(TripPlaceName),
             confidence = getDoubleValue(TripConfidence) ?: 0.0,
             type = getStringValue(TripTypeColumn)?.let { value ->
                 runCatching { TripType.valueOf(value) }.getOrNull()
@@ -607,6 +628,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
                 $TripConfidence REAL NOT NULL,
                 $TripTypeColumn TEXT NOT NULL,
                 $TripCoverPhotoId INTEGER,
+                $TripPlaceName TEXT,
                 $TripCreatedAt INTEGER NOT NULL,
                 $TripUpdatedAt INTEGER NOT NULL
             )
@@ -632,7 +654,8 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
                 $TripDestinationRadiusKm REAL,
                 $TripDestinationPhotoCount INTEGER NOT NULL,
                 $TripDestinationFirstDay INTEGER NOT NULL,
-                $TripDestinationLastDay INTEGER NOT NULL
+                $TripDestinationLastDay INTEGER NOT NULL,
+                $TripDestinationPlaceName TEXT
             )
             """.trimIndent()
         )
@@ -642,9 +665,14 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         execSQL("CREATE INDEX IF NOT EXISTS index_trip_destinations_trip ON $TripDestinationsTable($TripDestinationTripId)")
     }
 
+    private fun SQLiteDatabase.addTripPlaceNameColumns() {
+        execSQL("ALTER TABLE $TripsTable ADD COLUMN $TripPlaceName TEXT")
+        execSQL("ALTER TABLE $TripDestinationsTable ADD COLUMN $TripDestinationPlaceName TEXT")
+    }
+
     companion object {
         private const val DatabaseName = "photo_index.db"
-        private const val DatabaseVersion = 3
+        private const val DatabaseVersion = 4
 
         private const val PhotosTable = "photos"
         private const val PhotoClustersTable = "photo_clusters"
@@ -703,6 +731,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         private const val TripConfidence = "confidence"
         private const val TripTypeColumn = "type"
         private const val TripCoverPhotoId = "cover_photo_id"
+        private const val TripPlaceName = "place_name"
         private const val TripCreatedAt = "created_at"
         private const val TripUpdatedAt = "updated_at"
 
@@ -718,6 +747,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         private const val TripDestinationPhotoCount = "photo_count"
         private const val TripDestinationFirstDay = "first_day"
         private const val TripDestinationLastDay = "last_day"
+        private const val TripDestinationPlaceName = "place_name"
 
         private val Columns = arrayOf(
             MediaId,
@@ -767,6 +797,7 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             TripConfidence,
             TripTypeColumn,
             TripCoverPhotoId,
+            TripPlaceName,
             TripCreatedAt,
             TripUpdatedAt
         )

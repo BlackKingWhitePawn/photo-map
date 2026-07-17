@@ -4,6 +4,7 @@
 
 * Added local semantic trip segmentation for indexed photos with valid date and geotag metadata.
 * Added trip persistence in `photo_index.db` for trips, trip-photo links, and destinations.
+* Stored resolved trip place names in `photo_index.db` during segmentation.
 * Added `Поездки` FAB on the main map.
 * Added a separate dark MapLibre trip map using `TRIP_MAP_STYLE_URL`.
 * Rendered each trip as a thumbnail marker with a `+N` photo-count badge.
@@ -14,12 +15,15 @@
 * Opened lower-grid trip photos in the default Android gallery through a read-only view intent.
 * Added a grid gallery of the selected trip photos below the route map.
 * Added a long transparent right-edge trip timeline scrubber that snaps to trip points and shows semi-transparent trip labels.
+* Added a collapsed `...` entry button for the trip timeline scrubber.
+* Changed trip timeline dragging to wheel-like scrolling with minimal edge padding.
 * Highlighted the active trip timeline point with accent color and a border; single-trip timelines render as a point without a line.
 * Added a matching transparent right-edge photo scrubber for jumping between photos inside a trip.
 * Added a trip detail centering action that resets the route map zoom to the whole trip.
 * Switched app routing from a manual screen stack to Navigation Compose.
 * Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear immediately.
 * Preserved selected trip zoom and center when returning from trip detail.
+* Blocked accidental overlay taps shortly after map gestures so pinch/drag/zoom does not open trips or clusters.
 * Bumped Android metadata to `versionName=0.9.0`, `versionCode=15`.
 
 ## Scope
@@ -29,7 +33,7 @@ Included:
 * MVP heuristic trip segmentation;
 * dark OpenFreeMap style for the trip map;
 * local-only storage and UI for trip markers;
-* trip detail route map, platform geocoder place summary, route thumbnails, read-only gallery open, and photo grid;
+* trip detail route map, stored platform geocoder place summary, route thumbnails, read-only gallery open, and photo grid;
 * Navigation Compose dependency and `NavHost` routes.
 
 Not included:

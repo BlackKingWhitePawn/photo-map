@@ -16,6 +16,7 @@ data class TripMapMarker(
     val activeDayCount: Int,
     val startDay: Long,
     val endDay: Long,
+    val placeName: String?,
     val confidence: Double,
     val type: TripType
 )
@@ -61,3 +62,7 @@ data class TripSegmentationResult(
     val skippedPhotos: Int
 )
 
+data class TripPlaceNames(
+    val title: String?,
+    val destinationNamesBySortOrder: Map<Int, String> = emptyMap()
+)

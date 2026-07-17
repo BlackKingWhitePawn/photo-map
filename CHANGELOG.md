@@ -8,12 +8,13 @@
 
 Изменений пока нет.
 
-## [0.9.0] - 2026-07-17
+## [0.9.0] - 2026-07-18
 
 ### Added
 
 * Added semantic trip segmentation from locally indexed geotagged photos.
 * Added local trip storage in `photo_index.db` with trip markers, photo links, and destinations.
+* Added stored trip place names in `photo_index.db`, resolved during trip segmentation.
 * Added a `Поездки` FAB on the main map.
 * Added a separate dark MapLibre trip map using `TRIP_MAP_STYLE_URL`, defaulting to OpenFreeMap Dark.
 * Added trip markers rendered as photo thumbnails with `+N` photo count badges.
@@ -24,6 +25,8 @@
 * Added read-only opening of trip grid photos in the default Android gallery.
 * Added a grid gallery of the selected trip photos below the trip route map.
 * Added a long right-edge trip timeline scrubber that snaps to trip points and shows semi-transparent trip labels beside the marks.
+* Added a collapsed `...` entry button for the trip timeline scrubber.
+* Changed trip timeline dragging to wheel-like scrolling with minimal edge padding.
 * Highlighted the active trip timeline point with accent color and a border; single-trip timelines render as a point without a line.
 * Added a matching right-edge photo scrubber on the trip detail screen for jumping between photos inside a trip.
 * Added a trip detail centering action that resets the route map zoom to the whole trip.
@@ -37,6 +40,7 @@
 
 * Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear without moving the map.
 * Preserved the selected trip map zoom and center when returning from a trip detail screen.
+* Blocked accidental overlay taps for a short time after map gestures so pinch/drag/zoom does not open trips or clusters.
 
 ## [0.8.2] - 2026-07-17
 

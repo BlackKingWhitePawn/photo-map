@@ -6,10 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
-import android.location.Address
-import android.location.Geocoder
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.Log
 import android.util.Size
@@ -68,6 +67,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -85,15 +85,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
-import java.io.IOException
 import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,11 +105,8 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.PropertyFactory.fillColor
-import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlin.math.sin
 import kotlin.math.sqrt
 
 @Composable
@@ -130,6 +126,7 @@ fun TripMapScreen(
     val photosById = remember(photos) {
         photos.associateBy { photo -> photo.mediaId }
     }
+    var isTripTimelineExpanded by remember { mutableStateOf(false) }
     MaterialTheme(colorScheme = TripDarkColorScheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
@@ -153,14 +150,25 @@ fun TripMapScreen(
                         onCameraStateChanged = onCameraStateChanged,
                         onOpenTrip = onOpenTrip
                     )
-                    TripYearScrubber(
-                        tripMarkers = tripMarkers,
-                        focusedTripId = focusedTripId,
-                        onFocusTrip = onFocusTrip,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 10.dp)
-                    )
+                    if (tripMarkers.isNotEmpty()) {
+                        if (isTripTimelineExpanded) {
+                            TripYearScrubber(
+                                tripMarkers = tripMarkers,
+                                focusedTripId = focusedTripId,
+                                onFocusTrip = onFocusTrip,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 2.dp)
+                            )
+                        } else {
+                            TripTimelineCollapsedButton(
+                                onClick = { isTripTimelineExpanded = true },
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 6.dp)
+                            )
+                        }
+                    }
                     if (tripMarkers.isEmpty() && !isSegmenting) {
                         TripMapMessage(
                             title = "Поездки не найдены",
@@ -247,27 +255,8 @@ fun TripDetailsScreen(
     val dateTitle = remember(context, tripPhotos, tripMarker) {
         formatTripDateRange(context = context, photos = tripPhotos, marker = tripMarker)
     }
-    val shouldLoadPlaceNames = remember(routePoints) {
-        routePoints.isNotEmpty() && Geocoder.isPresent()
-    }
-    val placeNames by produceState<List<String>?>(
-        initialValue = if (shouldLoadPlaceNames) null else emptyList(),
-        routePoints,
-        shouldLoadPlaceNames
-    ) {
-        value = if (shouldLoadPlaceNames) {
-            value = null
-            withContext(Dispatchers.IO) {
-                context.resolveTripPlaceNames(routePoints)
-            }
-        } else {
-            emptyList()
-        }
-    }
-    val isTitleLoading = placeNames == null
-    val resolvedPlaceNames = placeNames.orEmpty()
-    val title = remember(resolvedPlaceNames, dateTitle) {
-        formatTripLocationTitle(placeNames = resolvedPlaceNames) ?: dateTitle
+    val title = remember(tripMarker?.placeName, dateTitle) {
+        tripMarker?.placeName?.takeIf { placeName -> placeName.isNotBlank() } ?: dateTitle
     }
     val subtitle = remember(title, dateTitle, tripPhotos.size, tripMarker?.activeDayCount) {
         formatTripDateSubtitle(
@@ -294,9 +283,10 @@ fun TripDetailsScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 TripDetailsTopBar(
+                    modifier = Modifier.zIndex(2f),
                     title = title,
                     subtitle = subtitle,
-                    isTitleLoading = isTitleLoading,
+                    isTitleLoading = false,
                     onCenterRoute = { routeCenterRequestKey += 1 },
                     onBack = onBack
                 )
@@ -304,6 +294,7 @@ fun TripDetailsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
+                        .clipToBounds()
                 ) {
                     TripRouteMap(
                         routePoints = routePoints,
@@ -343,6 +334,7 @@ fun TripDetailsScreen(
 
 @Composable
 private fun TripDetailsTopBar(
+    modifier: Modifier = Modifier,
     title: String,
     subtitle: String,
     isTitleLoading: Boolean,
@@ -350,7 +342,7 @@ private fun TripDetailsTopBar(
     onBack: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         color = Color(0xFF101420),
         contentColor = Color.White,
         shadowElevation = 4.dp
@@ -564,7 +556,11 @@ private fun TripYearScrubber(
     }
 
     var scrubberSize by remember { mutableStateOf(IntSize.Zero) }
+    var timelineOffsetY by remember { mutableStateOf(0f) }
+    var isTimelineDragging by remember { mutableStateOf(false) }
+    var lastTimelineFocusTripId by remember { mutableStateOf<Long?>(focusedTripId) }
     val density = LocalDensity.current
+    val latestFocusedTripId = rememberUpdatedState(focusedTripId)
     val selectedIndex = scrubberItems.indexOfFirst { item -> item.marker.tripId == focusedTripId }
         .takeIf { index -> index >= 0 }
         ?: 0
@@ -581,7 +577,31 @@ private fun TripYearScrubber(
         pointSpacingPx = timelinePointSpacingPx
     )
     val viewportCenterY = scrubberSize.height.toFloat() / 2f
-    val timelineOffsetY = viewportCenterY - selectedPointY
+    val minTimelineOffsetY = viewportCenterY - timelineYForIndex(
+        index = scrubberItems.lastIndex,
+        edgePaddingPx = timelineEdgePaddingPx,
+        pointSpacingPx = timelinePointSpacingPx
+    )
+    val maxTimelineOffsetY = viewportCenterY - timelineYForIndex(
+        index = 0,
+        edgePaddingPx = timelineEdgePaddingPx,
+        pointSpacingPx = timelinePointSpacingPx
+    )
+    val centeredTimelineOffsetY = (viewportCenterY - selectedPointY)
+        .coerceIn(minTimelineOffsetY, maxTimelineOffsetY)
+
+    LaunchedEffect(
+        selectedIndex,
+        scrubberSize.height,
+        timelineEdgePaddingPx,
+        timelinePointSpacingPx,
+        isTimelineDragging
+    ) {
+        lastTimelineFocusTripId = focusedTripId
+        if (!isTimelineDragging && scrubberSize.height > 0) {
+            timelineOffsetY = centeredTimelineOffsetY
+        }
+    }
 
     fun focusAt(offsetY: Float) {
         val timelineY = offsetY - timelineOffsetY
@@ -591,7 +611,30 @@ private fun TripYearScrubber(
             pointSpacingPx = timelinePointSpacingPx,
             itemCount = scrubberItems.size
         )
-        onFocusTrip(scrubberItems[index].marker.tripId)
+        val targetPointY = timelineYForIndex(
+            index = index,
+            edgePaddingPx = timelineEdgePaddingPx,
+            pointSpacingPx = timelinePointSpacingPx
+        )
+        timelineOffsetY = (viewportCenterY - targetPointY)
+            .coerceIn(minTimelineOffsetY, maxTimelineOffsetY)
+        val tripId = scrubberItems[index].marker.tripId
+        lastTimelineFocusTripId = tripId
+        onFocusTrip(tripId)
+    }
+
+    fun focusCenteredItem(offsetY: Float) {
+        val index = timelineIndexForOffset(
+            offsetY = viewportCenterY - offsetY,
+            edgePaddingPx = timelineEdgePaddingPx,
+            pointSpacingPx = timelinePointSpacingPx,
+            itemCount = scrubberItems.size
+        )
+        val tripId = scrubberItems[index].marker.tripId
+        if (tripId != latestFocusedTripId.value && tripId != lastTimelineFocusTripId) {
+            lastTimelineFocusTripId = tripId
+            onFocusTrip(tripId)
+        }
     }
 
     Box(
@@ -599,13 +642,26 @@ private fun TripYearScrubber(
             .width(TripYearScrubberWidth)
             .height(TripYearScrubberViewportHeight)
             .onSizeChanged { size -> scrubberSize = size }
-            .pointerInput(scrubberItems) {
+            .pointerInput(scrubberItems, scrubberSize) {
                 detectTapGestures { offset -> focusAt(offset.y) }
             }
-            .pointerInput(scrubberItems) {
+            .pointerInput(scrubberItems, scrubberSize) {
                 detectDragGestures(
-                    onDragStart = { offset -> focusAt(offset.y) },
-                    onDrag = { change, _ -> focusAt(change.position.y) }
+                    onDragStart = {
+                        isTimelineDragging = true
+                    },
+                    onDragEnd = {
+                        isTimelineDragging = false
+                    },
+                    onDragCancel = {
+                        isTimelineDragging = false
+                    },
+                    onDrag = { _, dragAmount ->
+                        val nextOffset = (timelineOffsetY + dragAmount.y)
+                            .coerceIn(minTimelineOffsetY, maxTimelineOffsetY)
+                        timelineOffsetY = nextOffset
+                        focusCenteredItem(nextOffset)
+                    }
                 )
             }
     ) {
@@ -675,7 +731,7 @@ private fun TripYearScrubber(
                                 x = 0,
                                 y = (y - labelHalfHeightPx).roundToInt()
                             )
-                    },
+                        },
                     text = item.label,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (index == selectedIndex) FontWeight.Bold else FontWeight.Medium,
@@ -688,6 +744,31 @@ private fun TripYearScrubber(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TripTimelineCollapsedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .size(TripTimelineCollapsedButtonSize)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = Color(0xD9182030),
+        contentColor = Color.White,
+        border = BorderStroke(1.dp, TripTimelineActiveColor.copy(alpha = 0.72f)),
+        shadowElevation = 8.dp
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                text = "...",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -819,6 +900,7 @@ private fun TripMapLibreMap(
     var hasAppliedInitialCamera by remember { mutableStateOf(false) }
     var appliedFocusedTripId by remember { mutableStateOf<Long?>(null) }
     var projectedMarkers by remember { mutableStateOf(emptyList<ProjectedTripMarker>()) }
+    var overlayTapBlockedUntilMs by remember { mutableStateOf(0L) }
     val latestTripMarkers = rememberUpdatedState(tripMarkers)
     val latestFocusedTripId = rememberUpdatedState(focusedTripId)
     val latestInitialCameraState = rememberUpdatedState(initialCameraState)
@@ -831,8 +913,12 @@ private fun TripMapLibreMap(
             getMapAsync { mapLibreMap ->
                 map = mapLibreMap
                 mapLibreMap.uiSettings.setAllGesturesEnabled(true)
-                mapLibreMap.addOnCameraMoveListener { cameraRevision += 1 }
+                mapLibreMap.addOnCameraMoveListener {
+                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
+                    cameraRevision += 1
+                }
                 mapLibreMap.addOnCameraIdleListener {
+                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
                     cameraRevision += 1
                     latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                 }
@@ -904,6 +990,8 @@ private fun TripMapLibreMap(
         TripMarkerOverlay(
             projectedMarkers = projectedMarkers,
             photosById = photosById,
+            focusedTripId = focusedTripId,
+            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs },
             onOpenTrip = onOpenTrip
         )
     }
@@ -913,30 +1001,40 @@ private fun TripMapLibreMap(
 private fun TripMarkerOverlay(
     projectedMarkers: List<ProjectedTripMarker>,
     photosById: Map<Long, DevicePhoto>,
+    focusedTripId: Long?,
+    isTapBlocked: () -> Boolean,
     onOpenTrip: (Long) -> Unit
 ) {
     val density = LocalDensity.current
     val markerSize = 74.dp
-    val markerSizePx = with(density) { markerSize.toPx() }
+    val focusedMarkerSize = 84.dp
     Box(modifier = Modifier.fillMaxSize()) {
         projectedMarkers.forEach { projected ->
             key(projected.marker.tripId) {
+                val isFocused = projected.marker.tripId == focusedTripId
+                val itemMarkerSize = if (isFocused) focusedMarkerSize else markerSize
+                val itemMarkerSizePx = with(density) { itemMarkerSize.toPx() }
                 val coverPhoto = projected.marker.coverPhotoId?.let { photoId -> photosById[photoId] }
                 TripClusterMarker(
                     marker = projected.marker,
                     coverPhoto = coverPhoto,
+                    isFocused = isFocused,
                     modifier = Modifier
                         .offset {
                             markerOffset(
                                 screenX = projected.screenX,
                                 screenY = projected.screenY,
-                                markerSizePx = markerSizePx,
+                                markerSizePx = itemMarkerSizePx,
                                 viewportWidth = projected.viewportWidth,
                                 viewportHeight = projected.viewportHeight
                             )
                         }
-                        .size(markerSize)
-                        .clickable { onOpenTrip(projected.marker.tripId) }
+                        .size(itemMarkerSize)
+                        .clickable {
+                            if (!isTapBlocked()) {
+                                onOpenTrip(projected.marker.tripId)
+                            }
+                        }
                 )
             }
         }
@@ -947,6 +1045,7 @@ private fun TripMarkerOverlay(
 private fun TripClusterMarker(
     marker: TripMapMarker,
     coverPhoto: DevicePhoto?,
+    isFocused: Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -968,14 +1067,17 @@ private fun TripClusterMarker(
         Surface(
             modifier = Modifier.fillMaxSize(),
             shape = RoundedCornerShape(14.dp),
-            color = Color(0xFF243047),
-            border = BorderStroke(2.dp, Color(0xFF9DB7FF)),
-            shadowElevation = 8.dp
+            color = if (isFocused) Color(0xFF2D3B66) else Color(0xFF243047),
+            border = BorderStroke(
+                width = if (isFocused) 3.dp else 2.dp,
+                color = if (isFocused) TripTimelineActiveColor else Color(0xFF9DB7FF).copy(alpha = 0.64f)
+            ),
+            shadowElevation = if (isFocused) 14.dp else 8.dp
         ) {
             if (thumbnail != null) {
                 Image(
                     bitmap = requireNotNull(thumbnail).asImageBitmap(),
-                    contentDescription = "Поездка ${marker.tripId}",
+                    contentDescription = marker.placeName ?: "Поездка",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -996,7 +1098,7 @@ private fun TripClusterMarker(
         Surface(
             modifier = Modifier.align(Alignment.BottomEnd),
             shape = CircleShape,
-            color = Color(0xEE5B6CFF),
+            color = if (isFocused) TripTimelineActiveColor else Color(0xEE5B6CFF),
             contentColor = Color.White,
             border = BorderStroke(1.dp, Color(0xFF101420))
         ) {
@@ -1530,6 +1632,9 @@ private fun scrubberEdgePadding(heightPx: Float): Float {
 }
 
 private fun TripMapMarker.tripTimelineLabel(): String {
+    placeName?.trim()?.takeIf { value -> value.isNotEmpty() }?.let { placeName ->
+        return placeName
+    }
     val start = photoDateDayToMillis(startDay)
     val end = photoDateDayToMillis(endDay)
     val startText = DateFormat.format("dd.MM.yy", start).toString()
@@ -1801,20 +1906,6 @@ private fun formatTripDateRange(
     return if (startText == endText) startText else "$startText - $endText"
 }
 
-private fun formatTripLocationTitle(
-    placeNames: List<String>
-): String? {
-    if (placeNames.isEmpty()) {
-        return null
-    }
-
-    return if (placeNames.size <= 3) {
-        placeNames.joinToString(" - ")
-    } else {
-        placeNames.take(3).joinToString(" - ") + " +${placeNames.size - 3}"
-    }
-}
-
 private fun formatTripDateSubtitle(
     title: String,
     dateTitle: String,
@@ -1830,81 +1921,6 @@ private fun formatTripDateSubtitle(
         }
     }
     return if (title == dateTitle) stats else "$dateTitle · $stats"
-}
-
-private fun Context.resolveTripPlaceNames(routePoints: List<TripRoutePoint>): List<String> {
-    if (routePoints.isEmpty() || !Geocoder.isPresent()) {
-        return emptyList()
-    }
-
-    val geocoder = Geocoder(this, Locale.getDefault())
-    return routePoints
-        .placeLookupPoints()
-        .mapNotNull { point -> geocoder.resolvePlaceName(point) }
-        .distinctBy { name -> name.lowercase(Locale.getDefault()) }
-        .take(TripPlaceMaxLookupCount)
-}
-
-@Suppress("DEPRECATION")
-private fun Geocoder.resolvePlaceName(point: TripRoutePoint): String? {
-    return try {
-        getFromLocation(point.latitude, point.longitude, 1)
-            ?.firstOrNull()
-            ?.toTripPlaceName()
-    } catch (exception: IOException) {
-        Log.w(TripMapLogTag, "Trip place lookup failed: photoId=${point.photoId}", exception)
-        null
-    } catch (exception: RuntimeException) {
-        Log.w(TripMapLogTag, "Trip place lookup unavailable: photoId=${point.photoId}", exception)
-        null
-    }
-}
-
-private fun Address.toTripPlaceName(): String? {
-    return listOf(
-        locality,
-        subAdminArea,
-        adminArea,
-        countryName
-    ).firstOrNull { value -> !value.isNullOrBlank() }?.trim()
-}
-
-private fun List<TripRoutePoint>.placeLookupPoints(): List<TripRoutePoint> {
-    if (size <= 2) {
-        return this
-    }
-
-    val selected = mutableListOf(first())
-    drop(1).dropLast(1).forEach { point ->
-        if (selected.size >= TripPlaceMaxLookupCount - 1) {
-            return@forEach
-        }
-        val isNewPlace = selected.all { selectedPoint ->
-            selectedPoint.distanceKmTo(point) >= TripPlaceLookupMinDistanceKm
-        }
-        if (isNewPlace) {
-            selected += point
-        }
-    }
-    val last = last()
-    if (selected.none { point -> point.photoId == last.photoId }) {
-        selected += last
-    }
-    return selected.take(TripPlaceMaxLookupCount)
-}
-
-private fun TripRoutePoint.distanceKmTo(other: TripRoutePoint): Double {
-    val firstLatitude = Math.toRadians(latitude)
-    val secondLatitude = Math.toRadians(other.latitude)
-    val latitudeDelta = Math.toRadians(other.latitude - latitude)
-    val longitudeDelta = Math.toRadians(other.longitude - longitude)
-    val haversine = (
-        sin(latitudeDelta / 2.0) * sin(latitudeDelta / 2.0) +
-        cos(firstLatitude) * cos(secondLatitude) *
-        sin(longitudeDelta / 2.0) * sin(longitudeDelta / 2.0)
-        ).coerceIn(0.0, 1.0)
-    val centralAngle = 2.0 * atan2(sqrt(haversine), sqrt(1.0 - haversine))
-    return EarthRadiusKm * centralAngle
 }
 
 private fun Context.openPhotoInDefaultGallery(photo: DevicePhoto) {
@@ -2016,20 +2032,19 @@ private const val TripRouteThumbnailPx = 128
 private const val TripRouteMaxThumbnailMarkers = 36
 private const val TripRouteThumbnailMinDistancePx = 56f
 private const val TripRouteSmoothingSteps = 10
-private const val TripPlaceMaxLookupCount = 5
-private const val TripPlaceLookupMinDistanceKm = 18.0
-private const val EarthRadiusKm = 6371.0
+private const val MapGestureTapBlockMs = 450L
 private const val TripYearScrubberEdgePaddingFraction = 0.08f
 private const val TripMapLogTag = "PhotoMapTrips"
 private const val TripMapLandFill = "#151B28"
 
 private val TripMapBackground = Color(0xFF070A10)
 private val TripTimelineActiveColor = Color(0xFF9DB7FF)
+private val TripTimelineCollapsedButtonSize = 48.dp
 private val TripYearScrubberWidth = 154.dp
 private val TripYearScrubberViewportHeight = 520.dp
-private val TripYearTimelineEdgePadding = 40.dp
+private val TripYearTimelineEdgePadding = 16.dp
 private val TripYearTimelinePointSpacing = 58.dp
-private val TripYearTimelineTrackEndPadding = 22.dp
+private val TripYearTimelineTrackEndPadding = 8.dp
 private val TripYearTimelineLabelWidth = 112.dp
 private val TripYearTimelineLabelHeight = 22.dp
 private val TripYearScrubberTrackWidth = 3.dp

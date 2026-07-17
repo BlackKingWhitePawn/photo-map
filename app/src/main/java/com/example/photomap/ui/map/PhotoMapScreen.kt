@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.Log
 import android.util.Size
@@ -370,6 +371,7 @@ private fun PhotoMapLibreMap(
     var styleGeneration by remember { mutableStateOf(0) }
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var cameraMoveRevision by remember { mutableStateOf(0) }
+    var overlayTapBlockedUntilMs by remember { mutableStateOf(0L) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
     var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
@@ -395,13 +397,18 @@ private fun PhotoMapLibreMap(
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
                 mapLibreMap.addOnCameraMoveListener {
+                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
                     cameraMoveRevision += 1
                 }
                 mapLibreMap.addOnCameraIdleListener {
+                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
                     thumbnailRefreshKey += 1
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.addOnMapClickListener { point ->
+                    if (SystemClock.uptimeMillis() < overlayTapBlockedUntilMs) {
+                        return@addOnMapClickListener true
+                    }
                     runCatching {
                         mapLibreMap.handlePhotoMapClick(
                             point = point,
@@ -584,6 +591,7 @@ private fun PhotoMapLibreMap(
             renderState = mapRenderState,
             photosById = photosById,
             markerScalePercent = clusterSettings.markerScalePercent,
+            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs },
             onMarkerTap = { item ->
                 map?.handlePhotoMapRenderItemTap(
                     renderItem = item,
@@ -638,6 +646,7 @@ private fun MapMarkerOverlay(
     renderState: PhotoMapRenderState,
     photosById: Map<Long, DevicePhoto>,
     markerScalePercent: Int,
+    isTapBlocked: () -> Boolean,
     onMarkerTap: (PhotoMapRenderItem) -> Boolean
 ) {
     val density = LocalDensity.current
@@ -669,7 +678,11 @@ private fun MapMarkerOverlay(
                     item = item,
                     photo = representativePhoto,
                     sizePx = clusterSizePx,
-                    onClick = { onMarkerTap(item) },
+                    onClick = {
+                        if (!isTapBlocked()) {
+                            onMarkerTap(item)
+                        }
+                    },
                     modifier = Modifier
                         .offset {
                             markerOffset(
@@ -690,18 +703,22 @@ private fun MapMarkerOverlay(
                 if (photo != null) {
                     MapPhotoMarker(
                         photo = photo,
-                        onClick = { onMarkerTap(item) },
+                        onClick = {
+                            if (!isTapBlocked()) {
+                                onMarkerTap(item)
+                            }
+                        },
                         modifier = Modifier
                             .offset {
-                            markerOffset(
-                                screenX = item.screenX,
-                                screenY = item.screenY,
-                                markerSizePx = photoSizePx,
-                                viewportWidth = renderState.viewportWidth,
-                                viewportHeight = renderState.viewportHeight
-                            )
-                        }
-                        .size(photoSize)
+                                markerOffset(
+                                    screenX = item.screenX,
+                                    screenY = item.screenY,
+                                    markerSizePx = photoSizePx,
+                                    viewportWidth = renderState.viewportWidth,
+                                    viewportHeight = renderState.viewportHeight
+                                )
+                            }
+                            .size(photoSize)
                     )
                 }
             }
@@ -3342,6 +3359,7 @@ private data class BottomGalleryZoomTarget(
 
 private const val MapBoundsPaddingPx = 120
 private const val MapViewportRefreshDelayMs = 350L
+private const val MapGestureTapBlockMs = 450L
 private const val InitialSinglePhotoZoom = 14.0
 private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160

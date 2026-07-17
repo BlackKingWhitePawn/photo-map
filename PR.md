@@ -26,7 +26,11 @@ Not included:
 
 ## Checks
 
-* `assembleRelease` could not be completed because Gradle cache access outside the sandbox was not approved.
+* Release APK inspected: `app/release/photomap-v0.8.0.apk`.
+* APK metadata inspected with `aapt2 dump badging`: `versionCode=12`, `versionName=0.8.0`.
+* APK permissions inspected with `aapt2 dump permissions`.
+* APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
+* APK alignment inspected with `zipalign -c -p 4`.
 * Test, lint, `npx`, `tsc`, and `eslint` commands were not run by Codex for this patch, per the local project rule.
 
 ## Safety
@@ -55,5 +59,11 @@ release-notes/v0.8.0.md
 APK asset:
 
 ```text
-not built by Codex for this patch
+app/release/photomap-v0.8.0.apk
+```
+
+SHA-256:
+
+```text
+39BD6FF2ACB5619FA3FFF46FEEC4AA6980B4BDFD0D8A7DF1E436E1BDEE900112
 ```

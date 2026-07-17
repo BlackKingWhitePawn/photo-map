@@ -34,5 +34,5 @@ Not included:
 
 ## Checks
 
-`assembleRelease` could not be completed because Gradle cache access outside the sandbox was not approved.
+Release APK inspected at `app/release/photomap-v0.8.0.apk`.
 Codex did not run test, lint, `npx`, `tsc`, or `eslint` commands for this patch per the local project rule.

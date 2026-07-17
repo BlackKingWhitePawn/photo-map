@@ -22,6 +22,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -70,7 +71,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -78,6 +81,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -94,8 +98,11 @@ import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.photoDateDayToMillis
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
@@ -165,7 +172,7 @@ fun PhotoMapScreen(
                 onOpenSettings = onOpenSettings
             )
 
-            if (photosWithLocation.isEmpty() && !isScanning) {
+            if (photosWithLocation.isEmpty() && !isScanning && !dateFilter.isActive) {
                 MapMessage(
                     title = "Нет фотографий с геопозицией",
                     text = "На карте появятся фотографии, в которых сохранены GPS-координаты. Можно повторить сканирование или открыть настройки доступа.",
@@ -1113,17 +1120,92 @@ private fun DateFilterRangeSlider(
         }
 
         val context = LocalContext.current
+        val initialStartDay = dateFilter.selectedStartDay ?: minDay
+        val initialEndDay = dateFilter.selectedEndDay ?: maxDay
         var sliderRange by remember(dateFilter) {
             mutableStateOf(
-                (dateFilter.selectedStartDay ?: minDay).toFloat()..
-                    (dateFilter.selectedEndDay ?: maxDay).toFloat()
+                minOf(initialStartDay, initialEndDay).toFloat()..
+                    maxOf(initialStartDay, initialEndDay).toFloat()
+            )
+        }
+        var sliderWindow by remember(dateFilter) {
+            mutableStateOf(
+                buildDateSliderWindow(
+                    minDay = minDay,
+                    maxDay = maxDay,
+                    selectedStartDay = minOf(initialStartDay, initialEndDay),
+                    selectedEndDay = maxOf(initialStartDay, initialEndDay),
+                    zoomed = dateFilter.isActive
+                )
             )
         }
         var isDragging by remember { mutableStateOf(false) }
+        var pickerTarget by remember { mutableStateOf<DateFilterPickerTarget?>(null) }
+        val visibleStartDay = sliderWindow.startDay
+        val visibleEndDay = sliderWindow.endDay
         val selectedStartDay = sliderRange.start.roundToLong().coerceIn(minDay, maxDay)
         val selectedEndDay = sliderRange.endInclusive.roundToLong().coerceIn(minDay, maxDay)
         val startLabel = formatDateFilterSliderDay(context, minOf(selectedStartDay, selectedEndDay))
         val endLabel = formatDateFilterSliderDay(context, maxOf(selectedStartDay, selectedEndDay))
+        val dateTicks = remember(context, minDay, maxDay, visibleStartDay, visibleEndDay) {
+            buildDateSliderTicks(
+                context = context,
+                minDay = minDay,
+                maxDay = maxDay,
+                visibleStartDay = visibleStartDay,
+                visibleEndDay = visibleEndDay
+            )
+        }
+        val snapDays = remember(dateTicks, minDay, maxDay) {
+            (dateTicks.map { tick -> tick.day } + listOf(minDay, maxDay))
+                .distinct()
+                .sorted()
+        }
+
+        LaunchedEffect(pickerTarget) {
+            val target = pickerTarget ?: return@LaunchedEffect
+            val selectedDay = when (target) {
+                DateFilterPickerTarget.Start -> minOf(selectedStartDay, selectedEndDay)
+                DateFilterPickerTarget.End -> maxOf(selectedStartDay, selectedEndDay)
+            }
+            showDateFilterPicker(
+                context = context,
+                title = when (target) {
+                    DateFilterPickerTarget.Start -> "Начальная дата"
+                    DateFilterPickerTarget.End -> "Конечная дата"
+                },
+                selectedDay = selectedDay,
+                minDay = minDay,
+                maxDay = maxDay,
+                onDateSelected = { pickedDay ->
+                    val nextRange = when (target) {
+                        DateFilterPickerTarget.Start -> normalizeDateSliderRange(
+                            startDay = pickedDay,
+                            endDay = selectedEndDay,
+                            minDay = minDay,
+                            maxDay = maxDay
+                        )
+
+                        DateFilterPickerTarget.End -> normalizeDateSliderRange(
+                            startDay = selectedStartDay,
+                            endDay = pickedDay,
+                            minDay = minDay,
+                            maxDay = maxDay
+                        )
+                    }
+                    sliderRange = nextRange.toFloatRange()
+                    sliderWindow = buildDateSliderWindow(
+                        minDay = minDay,
+                        maxDay = maxDay,
+                        selectedStartDay = nextRange.startDay,
+                        selectedEndDay = nextRange.endDay,
+                        zoomed = true
+                    )
+                    onDateFilterChanged(nextRange.startDay, nextRange.endDay)
+                }
+            )
+            pickerTarget = null
+        }
 
         Column(
             modifier = Modifier
@@ -1136,17 +1218,29 @@ private fun DateFilterRangeSlider(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
+                Row(
                     modifier = Modifier.weight(1f),
-                    text = "$startLabel - $endLabel",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = if (isDragging) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (isDragging || dateFilter.isActive) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    DateFilterDateLabel(
+                        modifier = Modifier.weight(1f),
+                        text = startLabel,
+                        active = isDragging || dateFilter.isActive,
+                        onClick = { pickerTarget = DateFilterPickerTarget.Start }
+                    )
+                    Text(
+                        text = "-",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    DateFilterDateLabel(
+                        modifier = Modifier.weight(1f),
+                        text = endLabel,
+                        active = isDragging || dateFilter.isActive,
+                        onClick = { pickerTarget = DateFilterPickerTarget.End }
+                    )
+                }
                 IconButton(
                     modifier = Modifier.size(40.dp),
                     onClick = onClose
@@ -1165,42 +1259,113 @@ private fun DateFilterRangeSlider(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                RangeSlider(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = sliderRange,
-                    onValueChange = { range ->
-                        isDragging = true
-                        sliderRange = range.start.coerceIn(minDay.toFloat(), maxDay.toFloat())..
-                            range.endInclusive.coerceIn(minDay.toFloat(), maxDay.toFloat())
-                    },
-                    onValueChangeFinished = {
-                        isDragging = false
-                        val start = sliderRange.start.roundToLong().coerceIn(minDay, maxDay)
-                        val end = sliderRange.endInclusive.roundToLong().coerceIn(minDay, maxDay)
-                        onDateFilterChanged(start, end)
-                    },
-                    valueRange = minDay.toFloat()..maxDay.toFloat()
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 68.dp, max = 68.dp)
+                ) {
+                    DateSliderTimelineTicks(
+                        modifier = Modifier.fillMaxSize(),
+                        minDay = minDay,
+                        maxDay = maxDay,
+                        visibleStartDay = visibleStartDay,
+                        visibleEndDay = visibleEndDay,
+                        ticks = dateTicks
+                    )
+                    RangeSlider(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = sliderRange,
+                        onValueChange = { range ->
+                            isDragging = true
+                            val start = range.start.roundToLong()
+                                .coerceIn(visibleStartDay, visibleEndDay)
+                                .snapToDateSliderTick(
+                                    snapDays = snapDays,
+                                    visibleStartDay = visibleStartDay,
+                                    visibleEndDay = visibleEndDay,
+                                    thresholdMultiplier = DateSliderDragSnapThresholdMultiplier
+                                )
+                            val end = range.endInclusive.roundToLong()
+                                .coerceIn(visibleStartDay, visibleEndDay)
+                                .snapToDateSliderTick(
+                                    snapDays = snapDays,
+                                    visibleStartDay = visibleStartDay,
+                                    visibleEndDay = visibleEndDay,
+                                    thresholdMultiplier = DateSliderDragSnapThresholdMultiplier
+                                )
+                            val nextRange = normalizeDateSliderRange(
+                                startDay = start,
+                                endDay = end,
+                                minDay = minDay,
+                                maxDay = maxDay
+                            )
+                            sliderRange = nextRange.toFloatRange()
+                            sliderWindow = expandDateSliderWindowIfNeeded(
+                                current = sliderWindow,
+                                minDay = minDay,
+                                maxDay = maxDay,
+                                selectedStartDay = nextRange.startDay,
+                                selectedEndDay = nextRange.endDay
+                            )
+                        },
+                        onValueChangeFinished = {
+                            isDragging = false
+                            val start = sliderRange.start.roundToLong()
+                                .coerceIn(minDay, maxDay)
+                                .snapToDateSliderTick(
+                                    snapDays = snapDays,
+                                    visibleStartDay = visibleStartDay,
+                                    visibleEndDay = visibleEndDay,
+                                    thresholdMultiplier = DateSliderReleaseSnapThresholdMultiplier
+                                )
+                            val end = sliderRange.endInclusive.roundToLong()
+                                .coerceIn(minDay, maxDay)
+                                .snapToDateSliderTick(
+                                    snapDays = snapDays,
+                                    visibleStartDay = visibleStartDay,
+                                    visibleEndDay = visibleEndDay,
+                                    thresholdMultiplier = DateSliderReleaseSnapThresholdMultiplier
+                                )
+                            val nextRange = normalizeDateSliderRange(
+                                startDay = start,
+                                endDay = end,
+                                minDay = minDay,
+                                maxDay = maxDay
+                            )
+                            sliderRange = nextRange.toFloatRange()
+                            sliderWindow = buildDateSliderWindow(
+                                minDay = minDay,
+                                maxDay = maxDay,
+                                selectedStartDay = nextRange.startDay,
+                                selectedEndDay = nextRange.endDay,
+                                zoomed = nextRange.startDay != minDay || nextRange.endDay != maxDay
+                            )
+                            onDateFilterChanged(nextRange.startDay, nextRange.endDay)
+                        },
+                        valueRange = visibleStartDay.toFloat()..visibleEndDay.toFloat()
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = formatDateFilterFabDay(context, minDay),
+                        text = formatDateFilterFabDay(context, visibleStartDay),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedButton(
                         onClick = {
                             sliderRange = minDay.toFloat()..maxDay.toFloat()
+                            sliderWindow = DateSliderWindow(minDay, maxDay)
                             onDateFilterReset()
                         }
                     ) {
                         Text(text = "Сброс")
                     }
                     Text(
-                        text = formatDateFilterFabDay(context, maxDay),
+                        text = formatDateFilterFabDay(context, visibleEndDay),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1208,6 +1373,340 @@ private fun DateFilterRangeSlider(
             }
         }
     }
+}
+
+@Composable
+private fun DateFilterDateLabel(
+    text: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (active) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        contentColor = if (active) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    ) {
+        Text(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            text = text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun DateSliderTimelineTicks(
+    minDay: Long,
+    maxDay: Long,
+    visibleStartDay: Long,
+    visibleEndDay: Long,
+    ticks: List<DateSliderTick>,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val minorColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+    val majorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val labelPaint = remember(density, labelColor) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER
+        }
+    }
+    labelPaint.color = labelColor.toArgb()
+    labelPaint.textSize = with(density) { 10.dp.toPx() }
+
+    ComposeCanvas(modifier = modifier) {
+        if (visibleEndDay > visibleStartDay && maxDay > minDay) {
+            val horizontalPadding = DateSliderTickHorizontalPaddingDp.dp.toPx()
+            val trackStart = horizontalPadding
+            val trackEnd = size.width - horizontalPadding
+            val trackWidth = (trackEnd - trackStart).coerceAtLeast(1f)
+            val trackY = 32.dp.toPx().coerceAtMost(size.height - 24.dp.toPx())
+            val labelBaseline = size.height - 6.dp.toPx()
+            val visibleSpan = (visibleEndDay - visibleStartDay).toFloat().coerceAtLeast(1f)
+
+            drawLine(
+                color = minorColor,
+                start = Offset(trackStart, trackY),
+                end = Offset(trackEnd, trackY),
+                strokeWidth = 1.dp.toPx()
+            )
+
+            ticks.forEach { tick ->
+                if (tick.day !in visibleStartDay..visibleEndDay) {
+                    return@forEach
+                }
+
+                val fraction = ((tick.day - visibleStartDay).toFloat() / visibleSpan)
+                    .coerceIn(0f, 1f)
+                val x = trackStart + trackWidth * fraction
+                val tickHeight = if (tick.isMajor) 16.dp.toPx() else 9.dp.toPx()
+                drawLine(
+                    color = if (tick.isMajor) majorColor else minorColor,
+                    start = Offset(x, trackY - tickHeight),
+                    end = Offset(x, trackY + 2.dp.toPx()),
+                    strokeWidth = if (tick.isMajor) 2.dp.toPx() else 1.dp.toPx()
+                )
+
+                val label = tick.label ?: return@forEach
+                val halfLabel = labelPaint.measureText(label) / 2f
+                val labelX = x.coerceIn(trackStart + halfLabel, trackEnd - halfLabel)
+                drawContext.canvas.nativeCanvas.drawText(label, labelX, labelBaseline, labelPaint)
+            }
+        }
+    }
+}
+
+private enum class DateFilterPickerTarget {
+    Start,
+    End
+}
+
+private data class DateSliderWindow(
+    val startDay: Long,
+    val endDay: Long
+)
+
+private data class DateFilterDayRange(
+    val startDay: Long,
+    val endDay: Long
+) {
+    fun toFloatRange(): ClosedFloatingPointRange<Float> {
+        return startDay.toFloat()..endDay.toFloat()
+    }
+}
+
+private data class DateSliderTick(
+    val day: Long,
+    val label: String?,
+    val isMajor: Boolean
+)
+
+private fun showDateFilterPicker(
+    context: Context,
+    title: String,
+    selectedDay: Long,
+    minDay: Long,
+    maxDay: Long,
+    onDateSelected: (Long) -> Unit
+) {
+    val locale = context.dateFilterLocale()
+    val selectedCalendar = Calendar.getInstance(DateFilterUtcTimeZone, locale).apply {
+        timeInMillis = photoDateDayToMillis(selectedDay.coerceIn(minDay, maxDay))
+    }
+    val dialog = android.app.DatePickerDialog(
+        context,
+        { _, year, month, dayOfMonth ->
+            val pickedCalendar = Calendar.getInstance(DateFilterUtcTimeZone, locale).apply {
+                clear()
+                set(year, month, dayOfMonth, 0, 0, 0)
+            }
+            onDateSelected(
+                millisToDateFilterDay(pickedCalendar.timeInMillis).coerceIn(minDay, maxDay)
+            )
+        },
+        selectedCalendar.get(Calendar.YEAR),
+        selectedCalendar.get(Calendar.MONTH),
+        selectedCalendar.get(Calendar.DAY_OF_MONTH)
+    )
+    dialog.setTitle(title)
+    dialog.datePicker.minDate = datePickerLocalMillisForDateFilterDay(minDay, locale)
+    dialog.datePicker.maxDate = datePickerLocalMillisForDateFilterDay(maxDay, locale)
+    dialog.show()
+}
+
+private fun buildDateSliderWindow(
+    minDay: Long,
+    maxDay: Long,
+    selectedStartDay: Long,
+    selectedEndDay: Long,
+    zoomed: Boolean
+): DateSliderWindow {
+    if (!zoomed || maxDay <= minDay) {
+        return DateSliderWindow(minDay, maxDay)
+    }
+
+    val fullSpan = maxDay - minDay
+    val start = minOf(selectedStartDay, selectedEndDay).coerceIn(minDay, maxDay)
+    val end = maxOf(selectedStartDay, selectedEndDay).coerceIn(minDay, maxDay)
+    if (start == minDay && end == maxDay) {
+        return DateSliderWindow(minDay, maxDay)
+    }
+
+    val selectedSpan = (end - start).coerceAtLeast(1L)
+    val padding = maxOf(DateSliderMinFocusedPaddingDays, selectedSpan / 2L)
+    var windowStart = (start - padding).coerceAtLeast(minDay)
+    var windowEnd = (end + padding).coerceAtMost(maxDay)
+    val minWindowSpan = minOf(fullSpan, maxOf(DateSliderMinFocusedWindowDays, selectedSpan))
+
+    if (windowEnd - windowStart < minWindowSpan) {
+        val center = (start + end) / 2L
+        windowStart = (center - minWindowSpan / 2L).coerceAtLeast(minDay)
+        windowEnd = (windowStart + minWindowSpan).coerceAtMost(maxDay)
+        windowStart = (windowEnd - minWindowSpan).coerceAtLeast(minDay)
+    }
+
+    return DateSliderWindow(windowStart, windowEnd)
+}
+
+private fun expandDateSliderWindowIfNeeded(
+    current: DateSliderWindow,
+    minDay: Long,
+    maxDay: Long,
+    selectedStartDay: Long,
+    selectedEndDay: Long
+): DateSliderWindow {
+    if (current.startDay <= minDay && current.endDay >= maxDay) {
+        return current
+    }
+
+    val span = (current.endDay - current.startDay).coerceAtLeast(1L)
+    val edgeThreshold = maxOf(1L, (span * DateSliderEdgeExpandThresholdMultiplier).roundToLong())
+    val expandBy = maxOf(DateSliderMinFocusedWindowDays, span)
+    var nextStart = current.startDay
+    var nextEnd = current.endDay
+
+    if (selectedStartDay <= current.startDay + edgeThreshold && current.startDay > minDay) {
+        nextStart = (current.startDay - expandBy).coerceAtLeast(minDay)
+    }
+    if (selectedEndDay >= current.endDay - edgeThreshold && current.endDay < maxDay) {
+        nextEnd = (current.endDay + expandBy).coerceAtMost(maxDay)
+    }
+
+    return DateSliderWindow(nextStart, nextEnd)
+}
+
+private fun normalizeDateSliderRange(
+    startDay: Long,
+    endDay: Long,
+    minDay: Long,
+    maxDay: Long
+): DateFilterDayRange {
+    val start = minOf(startDay, endDay).coerceIn(minDay, maxDay)
+    val end = maxOf(startDay, endDay).coerceIn(minDay, maxDay)
+    return DateFilterDayRange(start, end)
+}
+
+private fun Long.snapToDateSliderTick(
+    snapDays: List<Long>,
+    visibleStartDay: Long,
+    visibleEndDay: Long,
+    thresholdMultiplier: Double
+): Long {
+    if (snapDays.isEmpty() || visibleEndDay <= visibleStartDay) {
+        return this
+    }
+
+    val threshold = maxOf(
+        1L,
+        ((visibleEndDay - visibleStartDay) * thresholdMultiplier).roundToLong()
+    )
+    val nearest = snapDays
+        .asSequence()
+        .filter { day -> day in visibleStartDay..visibleEndDay }
+        .minByOrNull { day -> abs(day - this) }
+        ?: return this
+    return if (abs(nearest - this) <= threshold) nearest else this
+}
+
+private fun buildDateSliderTicks(
+    context: Context,
+    minDay: Long,
+    maxDay: Long,
+    visibleStartDay: Long,
+    visibleEndDay: Long
+): List<DateSliderTick> {
+    val start = visibleStartDay.coerceIn(minDay, maxDay)
+    val end = visibleEndDay.coerceIn(minDay, maxDay)
+    if (end <= start) {
+        return emptyList()
+    }
+
+    val span = end - start
+    val locale = context.dateFilterLocale()
+    val monthFormatter = SimpleDateFormat("MMM", locale).apply {
+        timeZone = DateFilterUtcTimeZone
+    }
+    val yearFormatter = SimpleDateFormat("yyyy", locale).apply {
+        timeZone = DateFilterUtcTimeZone
+    }
+    val calendar = Calendar.getInstance(DateFilterUtcTimeZone, locale).apply {
+        timeInMillis = photoDateDayToMillis(start)
+        set(Calendar.DAY_OF_MONTH, 1)
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    if (millisToDateFilterDay(calendar.timeInMillis) < start) {
+        calendar.add(Calendar.MONTH, 1)
+    }
+
+    val ticks = mutableListOf<DateSliderTick>()
+    while (millisToDateFilterDay(calendar.timeInMillis) <= end) {
+        val day = millisToDateFilterDay(calendar.timeInMillis)
+        val month = calendar.get(Calendar.MONTH)
+        val isYear = month == Calendar.JANUARY
+        val includeTick = when {
+            isYear -> true
+            span <= DateSliderShowEveryMonthMaxDays -> true
+            span <= DateSliderShowQuarterMaxDays -> month % 3 == 0
+            span <= DateSliderShowHalfYearMaxDays -> month % 6 == 0
+            else -> false
+        }
+        if (includeTick) {
+            val label = when {
+                isYear -> yearFormatter.format(calendar.time)
+                span <= DateSliderMonthLabelMaxDays -> monthFormatter.format(calendar.time)
+                span <= DateSliderQuarterLabelMaxDays && month % 3 == 0 -> {
+                    monthFormatter.format(calendar.time)
+                }
+                else -> null
+            }
+            ticks += DateSliderTick(
+                day = day,
+                label = label,
+                isMajor = isYear
+            )
+        }
+        calendar.add(Calendar.MONTH, 1)
+    }
+
+    return ticks.distinctBy { tick -> tick.day }.sortedBy { tick -> tick.day }
+}
+
+private fun millisToDateFilterDay(millis: Long): Long {
+    return Math.floorDiv(millis, DateFilterMillisPerDay)
+}
+
+private fun datePickerLocalMillisForDateFilterDay(day: Long, locale: Locale): Long {
+    val utcCalendar = Calendar.getInstance(DateFilterUtcTimeZone, locale).apply {
+        timeInMillis = photoDateDayToMillis(day)
+    }
+    return Calendar.getInstance(locale).apply {
+        clear()
+        set(
+            utcCalendar.get(Calendar.YEAR),
+            utcCalendar.get(Calendar.MONTH),
+            utcCalendar.get(Calendar.DAY_OF_MONTH),
+            12,
+            0,
+            0
+        )
+    }.timeInMillis
 }
 
 @Composable
@@ -2812,12 +3311,16 @@ private fun compactDateFilterLabel(context: Context, dateFilter: PhotoDateFilter
 }
 
 private fun formatDateFilterSliderDay(context: Context, day: Long): String {
-    return SimpleDateFormat(DateFilterSliderPattern, context.dateFilterLocale())
+    return SimpleDateFormat(DateFilterSliderPattern, context.dateFilterLocale()).apply {
+        timeZone = DateFilterUtcTimeZone
+    }
         .format(Date(photoDateDayToMillis(day)))
 }
 
 private fun formatDateFilterFabDay(context: Context, day: Long): String {
-    return SimpleDateFormat(DateFilterFabPattern, context.dateFilterLocale())
+    return SimpleDateFormat(DateFilterFabPattern, context.dateFilterLocale()).apply {
+        timeZone = DateFilterUtcTimeZone
+    }
         .format(Date(photoDateDayToMillis(day)))
 }
 
@@ -2891,6 +3394,18 @@ private const val ClusterThumbnailBlurSamplePx = 16
 private const val RenderCancellationCheckInterval = 128
 private const val DateFilterSliderPattern = "dd MMMM yyyy"
 private const val DateFilterFabPattern = "dd.MM.yy"
+private const val DateFilterMillisPerDay = 24L * 60L * 60L * 1000L
+private const val DateSliderMinFocusedPaddingDays = 7L
+private const val DateSliderMinFocusedWindowDays = 45L
+private const val DateSliderTickHorizontalPaddingDp = 18f
+private const val DateSliderEdgeExpandThresholdMultiplier = 0.12
+private const val DateSliderDragSnapThresholdMultiplier = 0.018
+private const val DateSliderReleaseSnapThresholdMultiplier = 0.026
+private const val DateSliderMonthLabelMaxDays = 185L
+private const val DateSliderQuarterLabelMaxDays = 730L
+private const val DateSliderShowEveryMonthMaxDays = 730L
+private const val DateSliderShowQuarterMaxDays = 1460L
+private const val DateSliderShowHalfYearMaxDays = 2920L
 private const val DateFabFallbackLabel = "\u0414\u0430\u0442\u0430"
 private const val CityWideClusterZoom = 11.0
 private const val DistrictClusterZoom = 12.5
@@ -2899,6 +3414,8 @@ private const val EarthRadiusKm = 6371.0
 private const val PhotoMapLogTag = "PhotoMapMap"
 
 private const val LandFillColor = "#E7ECE6"
+
+private val DateFilterUtcTimeZone: TimeZone = TimeZone.getTimeZone("UTC")
 
 private val ExactPoliticalBoundaryLayerIds = setOf(
     "countries-boundary",

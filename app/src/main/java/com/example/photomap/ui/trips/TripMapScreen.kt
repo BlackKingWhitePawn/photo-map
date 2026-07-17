@@ -93,6 +93,7 @@ import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
 import java.util.Date
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -900,7 +901,8 @@ private fun TripMapLibreMap(
     var hasAppliedInitialCamera by remember { mutableStateOf(false) }
     var appliedFocusedTripId by remember { mutableStateOf<Long?>(null) }
     var projectedMarkers by remember { mutableStateOf(emptyList<ProjectedTripMarker>()) }
-    var overlayTapBlockedUntilMs by remember { mutableStateOf(0L) }
+    val overlayTapBlockedUntilMs = remember { AtomicLong(0L) }
+    val lastCameraMoveProjectionAtMs = remember { AtomicLong(0L) }
     val latestTripMarkers = rememberUpdatedState(tripMarkers)
     val latestFocusedTripId = rememberUpdatedState(focusedTripId)
     val latestInitialCameraState = rememberUpdatedState(initialCameraState)
@@ -914,11 +916,17 @@ private fun TripMapLibreMap(
                 map = mapLibreMap
                 mapLibreMap.uiSettings.setAllGesturesEnabled(true)
                 mapLibreMap.addOnCameraMoveListener {
-                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
-                    cameraRevision += 1
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    if (now - lastCameraMoveProjectionAtMs.get() >= MapMoveReprojectionThrottleMs) {
+                        lastCameraMoveProjectionAtMs.set(now)
+                        cameraRevision += 1
+                    }
                 }
                 mapLibreMap.addOnCameraIdleListener {
-                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    lastCameraMoveProjectionAtMs.set(now)
                     cameraRevision += 1
                     latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                 }
@@ -991,7 +999,7 @@ private fun TripMapLibreMap(
             projectedMarkers = projectedMarkers,
             photosById = photosById,
             focusedTripId = focusedTripId,
-            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs },
+            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs.get() },
             onOpenTrip = onOpenTrip
         )
     }
@@ -1128,6 +1136,7 @@ private fun TripRouteMap(
     var isStyleReady by remember { mutableStateOf(false) }
     var cameraRevision by remember { mutableStateOf(0) }
     var projectedRoutePoints by remember { mutableStateOf(emptyList<ProjectedTripRoutePoint>()) }
+    val lastCameraMoveProjectionAtMs = remember { AtomicLong(0L) }
     val latestRoutePoints = rememberUpdatedState(routePoints)
 
     val mapView = remember {
@@ -1137,8 +1146,17 @@ private fun TripRouteMap(
             getMapAsync { mapLibreMap ->
                 map = mapLibreMap
                 mapLibreMap.uiSettings.setAllGesturesEnabled(true)
-                mapLibreMap.addOnCameraMoveListener { cameraRevision += 1 }
-                mapLibreMap.addOnCameraIdleListener { cameraRevision += 1 }
+                mapLibreMap.addOnCameraMoveListener {
+                    val now = SystemClock.uptimeMillis()
+                    if (now - lastCameraMoveProjectionAtMs.get() >= MapMoveReprojectionThrottleMs) {
+                        lastCameraMoveProjectionAtMs.set(now)
+                        cameraRevision += 1
+                    }
+                }
+                mapLibreMap.addOnCameraIdleListener {
+                    lastCameraMoveProjectionAtMs.set(SystemClock.uptimeMillis())
+                    cameraRevision += 1
+                }
                 mapLibreMap.setStyle(mapStyleUrl) { style ->
                     style.applyTripDarkStyle()
                     isStyleReady = true
@@ -2033,6 +2051,7 @@ private const val TripRouteMaxThumbnailMarkers = 36
 private const val TripRouteThumbnailMinDistancePx = 56f
 private const val TripRouteSmoothingSteps = 10
 private const val MapGestureTapBlockMs = 450L
+private const val MapMoveReprojectionThrottleMs = 32L
 private const val TripYearScrubberEdgePaddingFraction = 0.08f
 private const val TripMapLogTag = "PhotoMapTrips"
 private const val TripMapLandFill = "#151B28"

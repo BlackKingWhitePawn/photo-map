@@ -24,6 +24,7 @@
 * Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear immediately.
 * Preserved selected trip zoom and center when returning from trip detail.
 * Blocked accidental overlay taps shortly after map gestures so pinch/drag/zoom does not open trips or clusters.
+* Fixed severe main-map lag by keeping tap-block timing outside Compose state and throttling live marker reprojection.
 * Bumped Android metadata to `versionName=0.9.0`, `versionCode=15`.
 
 ## Scope

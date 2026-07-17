@@ -41,6 +41,7 @@
 * Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear without moving the map.
 * Preserved the selected trip map zoom and center when returning from a trip detail screen.
 * Blocked accidental overlay taps for a short time after map gestures so pinch/drag/zoom does not open trips or clusters.
+* Fixed severe map lag caused by updating Compose state on every camera movement while blocking accidental taps.
 
 ## [0.8.2] - 2026-07-17
 

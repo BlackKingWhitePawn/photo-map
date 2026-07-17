@@ -103,6 +103,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -371,7 +372,8 @@ private fun PhotoMapLibreMap(
     var styleGeneration by remember { mutableStateOf(0) }
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var cameraMoveRevision by remember { mutableStateOf(0) }
-    var overlayTapBlockedUntilMs by remember { mutableStateOf(0L) }
+    val overlayTapBlockedUntilMs = remember { AtomicLong(0L) }
+    val lastCameraMoveProjectionAtMs = remember { AtomicLong(0L) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
     var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
@@ -397,16 +399,22 @@ private fun PhotoMapLibreMap(
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
                 mapLibreMap.addOnCameraMoveListener {
-                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
-                    cameraMoveRevision += 1
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    if (now - lastCameraMoveProjectionAtMs.get() >= MapMoveReprojectionThrottleMs) {
+                        lastCameraMoveProjectionAtMs.set(now)
+                        cameraMoveRevision += 1
+                    }
                 }
                 mapLibreMap.addOnCameraIdleListener {
-                    overlayTapBlockedUntilMs = SystemClock.uptimeMillis() + MapGestureTapBlockMs
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    lastCameraMoveProjectionAtMs.set(now)
                     thumbnailRefreshKey += 1
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.addOnMapClickListener { point ->
-                    if (SystemClock.uptimeMillis() < overlayTapBlockedUntilMs) {
+                    if (SystemClock.uptimeMillis() < overlayTapBlockedUntilMs.get()) {
                         return@addOnMapClickListener true
                     }
                     runCatching {
@@ -591,7 +599,7 @@ private fun PhotoMapLibreMap(
             renderState = mapRenderState,
             photosById = photosById,
             markerScalePercent = clusterSettings.markerScalePercent,
-            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs },
+            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs.get() },
             onMarkerTap = { item ->
                 map?.handlePhotoMapRenderItemTap(
                     renderItem = item,
@@ -3360,6 +3368,7 @@ private data class BottomGalleryZoomTarget(
 private const val MapBoundsPaddingPx = 120
 private const val MapViewportRefreshDelayMs = 350L
 private const val MapGestureTapBlockMs = 450L
+private const val MapMoveReprojectionThrottleMs = 32L
 private const val InitialSinglePhotoZoom = 14.0
 private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160

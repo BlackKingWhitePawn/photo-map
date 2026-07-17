@@ -473,102 +473,26 @@ private fun PhotoMapLibreMap(
             settings = clusterSettings
         )
         mapRenderState = renderState
-        val visibleThumbnailFeatureCollection = withContext(Dispatchers.Default) {
-            PhotoMapFeatureMapper.toFeatureCollection(
-                renderState.thumbnailPhotoIds.mapNotNull { photoId -> photosById[photoId] }
-            )
-        }
         val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
         layerController.update(
             style = style,
-            featureCollection = renderState.clusterFeatureCollection,
+            featureCollection = emptyPhotoFeatureCollection(),
             settings = clusterSettings,
             colors = layerColors
         )
         layerController.updateVisibleThumbnails(
             style = style,
-            featureCollection = visibleThumbnailFeatureCollection
+            featureCollection = emptyPhotoFeatureCollection()
         )
-        val missingClusterThumbnailRequests = renderState.clusterThumbnailRequests
-            .filter { request -> !thumbnailImageRegistry.contains(request.imageKey) }
-            .take(MaxClusterThumbnailImagesPerPass)
-        val missingPhotoIds = renderState.thumbnailPhotoIds
-            .filter { photoId -> !thumbnailImageRegistry.contains(photoThumbnailImageKey(photoId)) }
-            .take(MaxThumbnailImagesPerPass)
         val refreshMessage =
             "Map render refresh: photos=${photosById.size}, clusters=${renderState.clusterCount}, " +
                 "singles=${renderState.singleCount}, thumbnails=${renderState.thumbnailPhotoIds.size}, " +
-                "missing=${missingPhotoIds.size}, clusterThumbs=${renderState.clusterThumbnailRequests.size}, " +
-                "missingClusterThumbs=${missingClusterThumbnailRequests.size}, cached=${thumbnailImageRegistry.size}, " +
+                "clusterThumbs=${renderState.clusterThumbnailRequests.size}, " +
                 "projected=${renderState.projectedPhotoCount}, baseRadius=${clusterSettings.radiusPx}, " +
                 "effectiveRadius=${renderState.effectiveClusterRadiusPx.roundToInt()}, " +
                 "zoom=${mapLibreMap.cameraPosition.zoom}, density=${clusterSettings.densityCoefficientPercent}%"
         Log.d(PhotoMapLogTag, refreshMessage)
         AppDiagnostics.record(PhotoMapLogTag, refreshMessage)
-        if (missingPhotoIds.isEmpty() && missingClusterThumbnailRequests.isEmpty()) {
-            return@LaunchedEffect
-        }
-
-        val clusterThumbnailImages = withContext(Dispatchers.IO) {
-            missingClusterThumbnailRequests.mapNotNull { request ->
-                val photo = photosById[request.representativePhotoId] ?: return@mapNotNull null
-                val bitmap = context.createClusterMapThumbnailBitmap(
-                    photoId = photo.mediaId,
-                    uriString = photo.uri,
-                    count = request.photoCount,
-                    borderColor = layerColors.photoStroke,
-                    backgroundColor = layerColors.photo
-                ) ?: return@mapNotNull null
-                request.imageKey to bitmap
-            }
-        }
-        val thumbnailImages = withContext(Dispatchers.IO) {
-            missingPhotoIds.mapNotNull { photoId ->
-                val photo = photosById[photoId] ?: return@mapNotNull null
-                val bitmap = context.createFixedMapThumbnailBitmap(
-                    photoId = photoId,
-                    uriString = photo.uri,
-                    borderColor = layerColors.photoStroke,
-                    backgroundColor = layerColors.photo
-                ) ?: return@mapNotNull null
-                photoThumbnailImageKey(photoId) to bitmap
-            }
-        }
-        var addedCount = 0
-        (clusterThumbnailImages + thumbnailImages).forEach { (key, bitmap) ->
-            val added = runCatching {
-                style.addImage(key, bitmap)
-                thumbnailImageRegistry.markAdded(style, key)
-            }.onFailure { error ->
-                Log.w(PhotoMapLogTag, "Failed to add thumbnail image to style: key=$key", error)
-                AppDiagnostics.record(PhotoMapLogTag, "Failed to add thumbnail image to style: key=$key", error)
-            }
-            if (added.isSuccess) {
-                addedCount += 1
-            }
-        }
-        val registeredMessage =
-            "Thumbnail images registered: added=$addedCount, decoded=${thumbnailImages.size}, " +
-                "clusterDecoded=${clusterThumbnailImages.size}, cached=${thumbnailImageRegistry.size}"
-        Log.d(PhotoMapLogTag, registeredMessage)
-        AppDiagnostics.record(PhotoMapLogTag, registeredMessage)
-        if (addedCount > 0) {
-            runCatching {
-                layerController.update(
-                    style = style,
-                    featureCollection = renderState.clusterFeatureCollection,
-                    settings = clusterSettings,
-                    colors = layerColors
-                )
-                layerController.updateVisibleThumbnails(
-                    style = style,
-                    featureCollection = visibleThumbnailFeatureCollection
-                )
-            }.onFailure { error ->
-                Log.w(PhotoMapLogTag, "Failed to refresh thumbnails after image registration", error)
-                AppDiagnostics.record(PhotoMapLogTag, "Failed to refresh thumbnails after image registration", error)
-            }
-        }
     }
 
     LaunchedEffect(

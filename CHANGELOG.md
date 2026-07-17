@@ -8,6 +8,21 @@
 
 Изменений пока нет.
 
+## [0.8.0] - 2026-07-17
+
+### Added
+
+* Added a date range filter on the map with a second FAB and a two-sided range slider.
+* The date FAB shows the selected range as `dd.MM.yy - dd.MM.yy`.
+* The date slider shows the active drag range as `dd MMMM yyyy`.
+
+### Changed
+
+* Map cluster rebuilding now runs as a cancellable asynchronous operation when the date filter, cluster density, or indexed photo set changes.
+* Visible viewport cluster loading is cancellable so stale map movement queries cannot overwrite newer results.
+* Screen-level marker compaction now runs off the main thread and cooperatively cancels during rapid map movement.
+* Cluster density changes are committed after the slider is released, matching the new date filter behavior.
+
 ## [0.7.2] - 2026-07-17
 
 ### Fixed

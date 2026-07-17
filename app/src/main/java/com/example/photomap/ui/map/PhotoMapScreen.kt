@@ -54,6 +54,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -90,14 +91,22 @@ import com.example.photomap.core.util.AppDiagnostics
 import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.cluster.VisiblePhotoMapItem
 import com.example.photomap.domain.model.DevicePhoto
+import com.example.photomap.domain.model.PhotoDateFilter
+import com.example.photomap.domain.model.photoDateDayToMillis
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.sin
 import kotlin.math.sqrt
 import org.maplibre.android.MapLibre
@@ -119,6 +128,7 @@ fun PhotoMapScreen(
     mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
+    dateFilter: PhotoDateFilter,
     showDebugPanel: Boolean,
     isScanning: Boolean,
     isScanPaused: Boolean,
@@ -129,6 +139,8 @@ fun PhotoMapScreen(
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit,
     onClusterDensityChanged: (Int) -> Unit,
+    onDateFilterChanged: (Long, Long) -> Unit,
+    onDateFilterReset: () -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val normalizedClusterSettings = clusterSettings.normalized()
@@ -165,9 +177,12 @@ fun PhotoMapScreen(
                         mapItems = mapItems,
                         mapStyleUrl = mapStyleUrl,
                         clusterSettings = normalizedClusterSettings,
+                        dateFilter = dateFilter,
                         showDebugPanel = showDebugPanel,
                         centerRequestKey = centerRequestKey,
                         onClusterDensityChanged = onClusterDensityChanged,
+                        onDateFilterChanged = onDateFilterChanged,
+                        onDateFilterReset = onDateFilterReset,
                         onViewportChanged = onViewportChanged
                     )
 
@@ -317,9 +332,12 @@ private fun PhotoMapLibreMap(
     mapItems: List<VisiblePhotoMapItem>,
     mapStyleUrl: String,
     clusterSettings: PhotoClusterSettings,
+    dateFilter: PhotoDateFilter,
     showDebugPanel: Boolean,
     centerRequestKey: Int,
     onClusterDensityChanged: (Int) -> Unit,
+    onDateFilterChanged: (Long, Long) -> Unit,
+    onDateFilterReset: () -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val context = LocalContext.current
@@ -640,10 +658,13 @@ private fun PhotoMapLibreMap(
                     onClose = { bottomGalleryState = null }
                 )
             }
-            ClusterDensityFabControl(
+            MapFabControls(
                 modifier = Modifier.fillMaxWidth(),
                 clusterSettings = clusterSettings,
-                onDensityChanged = onClusterDensityChanged
+                dateFilter = dateFilter,
+                onDensityChanged = onClusterDensityChanged,
+                onDateFilterChanged = onDateFilterChanged,
+                onDateFilterReset = onDateFilterReset
             )
         }
     }
@@ -947,6 +968,248 @@ private fun BottomPhotoGallery(
     }
 }
 
+private enum class MapFabPanel {
+    DateFilter,
+    Density
+}
+
+@Composable
+private fun MapFabControls(
+    clusterSettings: PhotoClusterSettings,
+    dateFilter: PhotoDateFilter,
+    onDensityChanged: (Int) -> Unit,
+    onDateFilterChanged: (Long, Long) -> Unit,
+    onDateFilterReset: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expandedPanel by remember { mutableStateOf<MapFabPanel?>(null) }
+    val context = LocalContext.current
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        AnimatedVisibility(
+            visible = expandedPanel == null,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FloatingActionButton(
+                    containerColor = if (dateFilter.isActive) {
+                        MaterialTheme.colorScheme.tertiaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.primaryContainer
+                    },
+                    contentColor = if (dateFilter.isActive) {
+                        MaterialTheme.colorScheme.onTertiaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    },
+                    onClick = { expandedPanel = MapFabPanel.DateFilter }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = android.R.drawable.ic_menu_recent_history),
+                            contentDescription = "Фильтр по дате",
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = compactDateFilterLabel(context, dateFilter),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                FloatingActionButton(onClick = { expandedPanel = MapFabPanel.Density }) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
+                            contentDescription = "Плотность кластеров",
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = "${clusterSettings.densityCoefficientPercent}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+        AnimatedVisibility(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxWidth(),
+            visible = expandedPanel != null,
+            enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
+            exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut()
+        ) {
+            when (expandedPanel) {
+                MapFabPanel.DateFilter -> DateFilterRangeSlider(
+                    modifier = Modifier.fillMaxWidth(),
+                    dateFilter = dateFilter,
+                    onDateFilterChanged = onDateFilterChanged,
+                    onDateFilterReset = onDateFilterReset,
+                    onClose = { expandedPanel = null }
+                )
+
+                MapFabPanel.Density -> ClusterDensitySlider(
+                    modifier = Modifier.fillMaxWidth(),
+                    clusterSettings = clusterSettings,
+                    onDensityChanged = onDensityChanged,
+                    onClose = { expandedPanel = null }
+                )
+
+                null -> Unit
+            }
+        }
+    }
+}
+
+@Composable
+private fun DateFilterRangeSlider(
+    dateFilter: PhotoDateFilter,
+    onDateFilterChanged: (Long, Long) -> Unit,
+    onDateFilterReset: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val minDay = dateFilter.minDay
+    val maxDay = dateFilter.maxDay
+    Card(modifier = modifier) {
+        if (minDay == null || maxDay == null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    modifier = Modifier.weight(1f),
+                    text = "Нет дат для фильтра",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                IconButton(
+                    modifier = Modifier.size(40.dp),
+                    onClick = onClose
+                ) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel),
+                        contentDescription = "Скрыть фильтр даты",
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            return@Card
+        }
+
+        val context = LocalContext.current
+        var sliderRange by remember(dateFilter) {
+            mutableStateOf(
+                (dateFilter.selectedStartDay ?: minDay).toFloat()..
+                    (dateFilter.selectedEndDay ?: maxDay).toFloat()
+            )
+        }
+        var isDragging by remember { mutableStateOf(false) }
+        val selectedStartDay = sliderRange.start.roundToLong().coerceIn(minDay, maxDay)
+        val selectedEndDay = sliderRange.endInclusive.roundToLong().coerceIn(minDay, maxDay)
+        val startLabel = formatDateFilterSliderDay(context, minOf(selectedStartDay, selectedEndDay))
+        val endLabel = formatDateFilterSliderDay(context, maxOf(selectedStartDay, selectedEndDay))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 10.dp, end = 6.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    modifier = Modifier.weight(1f),
+                    text = "$startLabel - $endLabel",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (isDragging) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isDragging || dateFilter.isActive) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                )
+                IconButton(
+                    modifier = Modifier.size(40.dp),
+                    onClick = onClose
+                ) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel),
+                        contentDescription = "Скрыть фильтр даты",
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            if (minDay == maxDay) {
+                Text(
+                    text = "Все фото на карте в одну дату",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                RangeSlider(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = sliderRange,
+                    onValueChange = { range ->
+                        isDragging = true
+                        sliderRange = range.start.coerceIn(minDay.toFloat(), maxDay.toFloat())..
+                            range.endInclusive.coerceIn(minDay.toFloat(), maxDay.toFloat())
+                    },
+                    onValueChangeFinished = {
+                        isDragging = false
+                        val start = sliderRange.start.roundToLong().coerceIn(minDay, maxDay)
+                        val end = sliderRange.endInclusive.roundToLong().coerceIn(minDay, maxDay)
+                        onDateFilterChanged(start, end)
+                    },
+                    valueRange = minDay.toFloat()..maxDay.toFloat()
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = formatDateFilterFabDay(context, minDay),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            sliderRange = minDay.toFloat()..maxDay.toFloat()
+                            onDateFilterReset()
+                        }
+                    ) {
+                        Text(text = "Сброс")
+                    }
+                    Text(
+                        text = formatDateFilterFabDay(context, maxDay),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ClusterDensityFabControl(
     clusterSettings: PhotoClusterSettings,
@@ -1038,11 +1301,6 @@ private fun ClusterDensitySlider(
                 value = sliderValue.coerceIn(densityRangeStart, densityRangeEnd),
                 onValueChange = { value ->
                     sliderValue = value
-                    val nextValue = value.roundToDensityStep()
-                    if (nextValue != lastSentValue) {
-                        lastSentValue = nextValue
-                        onDensityChanged(nextValue)
-                    }
                 },
                 onValueChangeFinished = {
                     val nextValue = sliderValue.roundToDensityStep()
@@ -1413,7 +1671,7 @@ private fun PhotoMapRenderItem.galleryPhotoIds(
         .toList()
 }
 
-private fun MapLibreMap.buildPhotoMapRenderState(
+private suspend fun MapLibreMap.buildPhotoMapRenderState(
     mapItems: List<VisiblePhotoMapItem>,
     photosById: Map<Long, DevicePhoto>,
     width: Int,
@@ -1448,19 +1706,7 @@ private fun MapLibreMap.buildPhotoMapRenderState(
             centerX = centerX,
             centerY = centerY
         )
-        val projectedItems = if (projectedPhotos.isNotEmpty()) {
-            clusterProjectedPhotos(
-                projectedPhotos = projectedPhotos,
-                radiusPx = effectiveClusterRadiusPx,
-                minPoints = settings.minPoints.coerceAtLeast(2),
-                maxDistanceKm = clusterMaxDistanceKm(
-                    zoom = cameraPosition.zoom,
-                    settings = settings
-                )
-            )
-                .map { item -> item.withDistanceFromCenter(centerX, centerY) }
-                .sortedBy { item -> item.distanceFromCenter }
-        } else {
+        val projectedFallbackItems = if (projectedPhotos.isEmpty()) {
             projectVisibleMapItems(
                 mapItems = mapItems,
                 minX = minX,
@@ -1470,45 +1716,69 @@ private fun MapLibreMap.buildPhotoMapRenderState(
                 centerX = centerX,
                 centerY = centerY
             )
+        } else {
+            emptyList()
         }
-        val renderItems = compactDenseRenderItems(
-            items = projectedItems,
-            width = width,
-            height = height,
-            centerX = centerX,
-            centerY = centerY
-        )
-        val clusterFeatures = renderItems
-            .filter { item -> item.isCluster }
-            .map { item -> item.toClusterFeature() }
-        val clusterThumbnailRequests = renderItems
-            .filter { item -> item.isCluster }
-            .mapNotNull { item ->
-                val representativePhotoId = item.representativePhotoId ?: return@mapNotNull null
-                ClusterThumbnailRequest(
-                    imageKey = photoClusterThumbnailImageKey(item.id),
-                    representativePhotoId = representativePhotoId,
-                    photoCount = item.photoCount
-                )
-            }
-        val thumbnailPhotoIds = visibleThumbnailPhotoIds(
-            items = renderItems,
-            width = width,
-            height = height,
-            settings = settings
-        )
+        val zoom = cameraPosition.zoom
 
-        PhotoMapRenderState(
-            items = renderItems,
-            thumbnailPhotoIds = thumbnailPhotoIds,
-            clusterThumbnailRequests = clusterThumbnailRequests,
-            clusterFeatureCollection = FeatureCollection.fromFeatures(clusterFeatures),
-            projectedPhotoCount = projectedItems.size,
-            viewportWidth = width,
-            viewportHeight = height,
-            effectiveClusterRadiusPx = effectiveClusterRadiusPx
-        )
+        withContext(Dispatchers.Default) {
+            val projectedItems = if (projectedPhotos.isNotEmpty()) {
+                clusterProjectedPhotos(
+                    projectedPhotos = projectedPhotos,
+                    radiusPx = effectiveClusterRadiusPx,
+                    minPoints = settings.minPoints.coerceAtLeast(2),
+                    maxDistanceKm = clusterMaxDistanceKm(
+                        zoom = zoom,
+                        settings = settings
+                    )
+                )
+                    .map { item -> item.withDistanceFromCenter(centerX, centerY) }
+                    .sortedBy { item -> item.distanceFromCenter }
+            } else {
+                projectedFallbackItems
+            }
+            val renderItems = compactDenseRenderItems(
+                items = projectedItems,
+                width = width,
+                height = height,
+                centerX = centerX,
+                centerY = centerY
+            )
+            val clusterFeatures = renderItems
+                .filter { item -> item.isCluster }
+                .map { item -> item.toClusterFeature() }
+            val clusterThumbnailRequests = renderItems
+                .filter { item -> item.isCluster }
+                .mapNotNull { item ->
+                    val representativePhotoId = item.representativePhotoId ?: return@mapNotNull null
+                    ClusterThumbnailRequest(
+                        imageKey = photoClusterThumbnailImageKey(item.id),
+                        representativePhotoId = representativePhotoId,
+                        photoCount = item.photoCount
+                    )
+                }
+            val thumbnailPhotoIds = visibleThumbnailPhotoIds(
+                items = renderItems,
+                width = width,
+                height = height,
+                settings = settings
+            )
+
+            PhotoMapRenderState(
+                items = renderItems,
+                thumbnailPhotoIds = thumbnailPhotoIds,
+                clusterThumbnailRequests = clusterThumbnailRequests,
+                clusterFeatureCollection = FeatureCollection.fromFeatures(clusterFeatures),
+                projectedPhotoCount = projectedItems.size,
+                viewportWidth = width,
+                viewportHeight = height,
+                effectiveClusterRadiusPx = effectiveClusterRadiusPx
+            )
+        }
     }.onFailure { error ->
+        if (error is CancellationException) {
+            throw error
+        }
         Log.w(PhotoMapLogTag, "Failed to build photo map render state", error)
     }.getOrDefault(PhotoMapRenderState.Empty)
 }
@@ -1537,7 +1807,7 @@ private fun MapLibreMap.reprojectPhotoMapRenderState(
     )
 }
 
-private fun compactDenseRenderItems(
+private suspend fun compactDenseRenderItems(
     items: List<PhotoMapRenderItem>,
     width: Int,
     height: Int,
@@ -1551,7 +1821,12 @@ private fun compactDenseRenderItems(
     val radiusPx = DenseRenderClusterRadiusPx.coerceAtLeast(1f)
     val clusters = mutableListOf<MutableRenderItemCluster>()
     val clustersByCell = mutableMapOf<ScreenGridCell, MutableList<MutableRenderItemCluster>>()
-    items.sortedBy { item -> item.distanceFromCenter }.forEach { item ->
+    val sortedItems = items.sortedBy { item -> item.distanceFromCenter }
+    for (index in sortedItems.indices) {
+        if (index % RenderCancellationCheckInterval == 0) {
+            currentCoroutineContext().ensureActive()
+        }
+        val item = sortedItems[index]
         val cell = item.screenCell(radiusPx)
         val targetCluster = cell.neighbors()
             .asSequence()
@@ -1777,7 +2052,7 @@ private fun MapLibreMap.projectVisibleMapItems(
         .toList()
 }
 
-private fun clusterProjectedPhotos(
+private suspend fun clusterProjectedPhotos(
     projectedPhotos: List<ProjectedMapPhoto>,
     radiusPx: Float,
     minPoints: Int,
@@ -1790,7 +2065,11 @@ private fun clusterProjectedPhotos(
     val clusters = mutableListOf<MutableMapPhotoCluster>()
     val clustersByCell = mutableMapOf<ScreenGridCell, MutableList<MutableMapPhotoCluster>>()
     val cellSize = radiusPx.coerceAtLeast(1f)
-    projectedPhotos.forEach { projectedPhoto ->
+    for (index in projectedPhotos.indices) {
+        if (index % RenderCancellationCheckInterval == 0) {
+            currentCoroutineContext().ensureActive()
+        }
+        val projectedPhoto = projectedPhotos[index]
         val cell = projectedPhoto.screenCell(cellSize)
         val targetCluster = cell.neighbors()
             .asSequence()
@@ -2526,6 +2805,31 @@ private fun scanStatusText(isPaused: Boolean, processed: Int, total: Int): Strin
     }
 }
 
+private fun compactDateFilterLabel(context: Context, dateFilter: PhotoDateFilter): String {
+    val startDay = dateFilter.selectedStartDay ?: return DateFabFallbackLabel
+    val endDay = dateFilter.selectedEndDay ?: return DateFabFallbackLabel
+    return "${formatDateFilterFabDay(context, startDay)} - ${formatDateFilterFabDay(context, endDay)}"
+}
+
+private fun formatDateFilterSliderDay(context: Context, day: Long): String {
+    return SimpleDateFormat(DateFilterSliderPattern, context.dateFilterLocale())
+        .format(Date(photoDateDayToMillis(day)))
+}
+
+private fun formatDateFilterFabDay(context: Context, day: Long): String {
+    return SimpleDateFormat(DateFilterFabPattern, context.dateFilterLocale())
+        .format(Date(photoDateDayToMillis(day)))
+}
+
+private fun Context.dateFilterLocale(): Locale {
+    val locales = resources.configuration.locales
+    return if (locales.size() > 0) {
+        locales.get(0)
+    } else {
+        Locale.getDefault()
+    }
+}
+
 private fun Float.roundToDensityStep(): Int {
     val step = PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
     return ((this / step).roundToInt() * step)
@@ -2584,6 +2888,10 @@ private const val ClusterTapMaxZoom = 20.0
 private const val LargeClusterGalleryThreshold = 50
 private const val SameGeoPointClusterDistanceKm = 0.001
 private const val ClusterThumbnailBlurSamplePx = 16
+private const val RenderCancellationCheckInterval = 128
+private const val DateFilterSliderPattern = "dd MMMM yyyy"
+private const val DateFilterFabPattern = "dd.MM.yy"
+private const val DateFabFallbackLabel = "\u0414\u0430\u0442\u0430"
 private const val CityWideClusterZoom = 11.0
 private const val DistrictClusterZoom = 12.5
 private const val NeighborhoodClusterZoom = 14.0

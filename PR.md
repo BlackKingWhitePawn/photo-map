@@ -1,20 +1,19 @@
-# PR: Map marker reprojection hotfix
+# PR: Map date filtering and cancellable clustering
 
 ## Summary
 
-* Prepared patch release metadata for `v0.7.2`.
-* Bumped Android version to `versionName=0.7.2`, `versionCode=11`.
-* Fixed same-location clusters so tapping them opens the mini gallery instead of endlessly zooming into one point.
-* Fixed overlay markers while moving the map: markers reproject to the current camera, while full cluster recalculation waits until camera idle.
-* Added a dense overlay compaction pass so nearby marker groups are merged into larger screen clusters.
-* Rendered single-photo map markers as rounded square thumbnails instead of circles.
-* Updated EXIF scan flow so saved geotagged batches appear on the map during scanning and cancelled scans resume from the last saved mark.
-* Started EXIF GPS scanning immediately after the first gallery permission grant.
+* Prepared minor release metadata for `v0.8.0`.
+* Bumped Android version to `versionName=0.8.0`, `versionCode=12`.
+* Added a map date range filter opened from a second FAB.
+* Added a two-sided range slider that applies the date filter only after release.
+* Shows slider drag dates as `dd MMMM yyyy`.
+* Shows the collapsed date FAB range as `dd.MM.yy - dd.MM.yy`.
+* Made map cluster rebuilding and viewport loading cancellable so stale work does not overwrite newer map state.
+* Moved screen-level marker compaction work off the main thread and added cooperative cancellation.
 
 ## Scope
 
-This PR focuses on map marker stability, dense marker performance, and same-geotag cluster taps.
-It also keeps long EXIF scans incremental so the map fills while the scanner is still running.
+This PR focuses on map filtering and map responsiveness during heavy cluster recalculation.
 
 Not included:
 
@@ -27,11 +26,12 @@ Not included:
 
 ## Checks
 
-* Release APK prepared: `app/release/photomap-v0.7.2.apk`.
-* APK metadata inspected with `aapt2 dump badging`: `versionCode=11`, `versionName=0.7.2`.
+* Release APK inspected: `app/release/photomap-v0.8.0.apk`.
+* APK metadata inspected with `aapt2 dump badging`: `versionCode=12`, `versionName=0.8.0`.
 * APK permissions inspected with `aapt2 dump permissions`.
 * APK signature inspected with `apksigner verify --verbose --print-certs`: `Verifies`, v2 signature enabled.
-* Build and test commands were not run by Codex for this patch, per the local project rule.
+* APK alignment inspected with `zipalign -c -p 4`.
+* Test, lint, `npx`, `tsc`, and `eslint` commands were not run by Codex for this patch, per the local project rule.
 
 ## Safety
 
@@ -47,23 +47,23 @@ The app remains read-only for user photos:
 Target release:
 
 ```text
-v0.7.2
+v0.8.0
 ```
 
 Release notes:
 
 ```text
-release-notes/v0.7.2.md
+release-notes/v0.8.0.md
 ```
 
 APK asset:
 
 ```text
-app/release/photomap-v0.7.2.apk
+app/release/photomap-v0.8.0.apk
 ```
 
 SHA-256:
 
 ```text
-F2E6DBB97BB143C57F6816820045D3B531B2CD031B7AC206745F42AF61B4F033
+39BD6FF2ACB5619FA3FFF46FEEC4AA6980B4BDFD0D8A7DF1E436E1BDEE900112
 ```

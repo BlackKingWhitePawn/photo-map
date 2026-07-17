@@ -25,8 +25,8 @@ android {
         applicationId = "com.example.photomap"
         minSdk = 29
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.7.2"
+        versionCode = 12
+        versionName = "0.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "MAP_STYLE_URL", "\"${mapStyleUrl.replace("\"", "\\\"")}\"")

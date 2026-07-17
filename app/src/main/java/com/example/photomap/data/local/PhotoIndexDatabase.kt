@@ -10,6 +10,8 @@ import com.example.photomap.data.cluster.PhotoClusterLink
 import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.cluster.StoredPhotoCluster
 import com.example.photomap.data.media.PhotoIndexStats
+import com.example.photomap.domain.model.PhotoDateFilter
+import com.example.photomap.domain.model.matchesPhotoDateFilter
 
 class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
     context.applicationContext,
@@ -75,7 +77,10 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
         return photos
     }
 
-    fun getPhotosInBounds(bounds: PhotoMapBounds): List<IndexedPhoto> {
+    fun getPhotosInBounds(
+        bounds: PhotoMapBounds,
+        dateFilter: PhotoDateFilter = PhotoDateFilter()
+    ): List<IndexedPhoto> {
         val photos = mutableListOf<IndexedPhoto>()
         readableDatabase.query(
             PhotosTable,
@@ -93,7 +98,10 @@ class PhotoIndexDatabase(context: Context) : SQLiteOpenHelper(
             "$DateTaken DESC, $DateModified DESC"
         ).use { cursor ->
             while (cursor.moveToNext()) {
-                photos += cursor.toIndexedPhoto()
+                val photo = cursor.toIndexedPhoto()
+                if (photo.toDevicePhoto().matchesPhotoDateFilter(dateFilter)) {
+                    photos += photo
+                }
             }
         }
         return photos

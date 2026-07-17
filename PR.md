@@ -1,32 +1,53 @@
-# PR: Fix singleton map clusters
+# PR: Add trip segmentation map
 
 ## Summary
 
-* Prepared patch release metadata for `v0.8.2`.
-* Bumped Android version to `versionName=0.8.2`, `versionCode=14`.
-* Normalized stored clusters with `photoCount=1` to visible single-photo map items.
-* Changed visible map item aggregate detection so only `photoCount > 1` is treated as an aggregate.
-* Fixed duplicated single-photo rendering where the same photo could appear as both a cluster and a photo marker.
-* Cleared duplicate MapLibre marker sources so visible markers are rendered only by the Compose overlay.
+* Added local semantic trip segmentation for indexed photos with valid date and geotag metadata.
+* Added trip persistence in `photo_index.db` for trips, trip-photo links, and destinations.
+* Stored resolved trip place names in `photo_index.db` during segmentation.
+* Added `Поездки` FAB on the main map.
+* Added a separate dark MapLibre trip map using `TRIP_MAP_STYLE_URL`.
+* Rendered each trip as a thumbnail marker with a `+N` photo-count badge.
+* Added a trip detail page opened by tapping a trip marker.
+* Rendered the selected trip with platform geocoder place names in the title and trip dates in the subtitle.
+* Rendered the selected trip as a smoothed chronological route line over the dark map, with photo points and a start-to-end gradient.
+* Added clickable route-point thumbnails that scroll the lower gallery to the selected trip photo.
+* Opened lower-grid trip photos in the default Android gallery through a read-only view intent.
+* Added a grid gallery of the selected trip photos below the route map.
+* Added a long transparent right-edge trip timeline scrubber that snaps to trip points and shows semi-transparent trip labels.
+* Added a collapsed `...` entry button for the trip timeline scrubber.
+* Changed trip timeline dragging to wheel-like scrolling with minimal edge padding.
+* Highlighted the active trip timeline point with accent color and a border; single-trip timelines render as a point without a line.
+* Added a matching transparent right-edge photo scrubber for jumping between photos inside a trip.
+* Added a trip detail centering action that resets the route map zoom to the whole trip.
+* Switched app routing from a manual screen stack to Navigation Compose.
+* Refreshed the main map viewport after scan, camera fit, and returning from trip screens so normal photo markers appear immediately.
+* Preserved selected trip zoom and center when returning from trip detail.
+* Blocked accidental overlay taps shortly after map gestures so pinch/drag/zoom does not open trips or clusters.
+* Fixed severe main-map lag by keeping tap-block timing outside Compose state and throttling live marker reprojection.
+* Bumped Android metadata to `versionName=0.9.0`, `versionCode=15`.
 
 ## Scope
 
-This PR is a patch on top of the `v0.8.1` date filter patch release.
+Included:
+
+* MVP heuristic trip segmentation;
+* dark OpenFreeMap style for the trip map;
+* local-only storage and UI for trip markers;
+* trip detail route map, stored platform geocoder place summary, route thumbnails, read-only gallery open, and photo grid;
+* Navigation Compose dependency and `NavHost` routes.
 
 Not included:
 
-* Building or signing a `v0.8.2` release APK by Codex.
-* Running Gradle build, test, lint, `npx`, `tsc`, or `eslint` commands.
-* Room migration.
-* Rebuilding the stored cluster index.
-* Changing original user photos.
+* editing trip boundaries;
+* reverse geocoding or city names from network APIs;
+* external geocoding SDKs or API keys;
+* HMM/HSMM, Bayesian online detection, or external ML libraries;
+* changing original user photos.
 
 ## Checks
 
-* `git diff --check` completed without whitespace errors.
-* Conflict markers were not found in the changed files.
-* Test, lint, Gradle build, `npx`, `tsc`, and `eslint` commands were not run by Codex for this patch, per the local project rule.
-* A `v0.8.2` APK was not built or inspected after the version bump.
+Per the local project rule, Codex did not run Gradle build, tests, lint, `npx`, `tsc`, or `eslint`.
 
 ## Safety
 
@@ -34,25 +55,25 @@ The app remains read-only for user photos:
 
 * no MediaStore delete/trash/write requests;
 * no EXIF mutation;
-* no upload of photos, coordinates, EXIF, or file identifiers;
-* cluster and map data stay local to the device.
+* no upload of photos, coordinates, EXIF, media IDs, or trip statistics;
+* trip and map data stay local to the device.
 
 ## Release
 
 Target release:
 
 ```text
-v0.8.2
+v0.9.0
 ```
 
 Release notes:
 
 ```text
-release-notes/v0.8.2.md
+release-notes/v0.9.0.md
 ```
 
 APK asset:
 
 ```text
-not built after the v0.8.2 version bump
+not built after the v0.9.0 version bump
 ```

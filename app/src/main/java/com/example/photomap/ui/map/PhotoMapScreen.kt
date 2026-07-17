@@ -13,6 +13,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.Log
 import android.util.Size
@@ -102,6 +103,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -145,6 +147,7 @@ fun PhotoMapScreen(
     onResume: () -> Unit,
     onCancel: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenTrips: () -> Unit,
     onClusterDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
@@ -190,6 +193,7 @@ fun PhotoMapScreen(
                         onClusterDensityChanged = onClusterDensityChanged,
                         onDateFilterChanged = onDateFilterChanged,
                         onDateFilterReset = onDateFilterReset,
+                        onOpenTrips = onOpenTrips,
                         onViewportChanged = onViewportChanged
                     )
 
@@ -345,6 +349,7 @@ private fun PhotoMapLibreMap(
     onClusterDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
+    onOpenTrips: () -> Unit,
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     val context = LocalContext.current
@@ -367,6 +372,8 @@ private fun PhotoMapLibreMap(
     var styleGeneration by remember { mutableStateOf(0) }
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var cameraMoveRevision by remember { mutableStateOf(0) }
+    val overlayTapBlockedUntilMs = remember { AtomicLong(0L) }
+    val lastCameraMoveProjectionAtMs = remember { AtomicLong(0L) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
     var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
@@ -392,13 +399,24 @@ private fun PhotoMapLibreMap(
                 map = mapLibreMap
                 mapLibreMap.configureGestures()
                 mapLibreMap.addOnCameraMoveListener {
-                    cameraMoveRevision += 1
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    if (now - lastCameraMoveProjectionAtMs.get() >= MapMoveReprojectionThrottleMs) {
+                        lastCameraMoveProjectionAtMs.set(now)
+                        cameraMoveRevision += 1
+                    }
                 }
                 mapLibreMap.addOnCameraIdleListener {
+                    val now = SystemClock.uptimeMillis()
+                    overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    lastCameraMoveProjectionAtMs.set(now)
                     thumbnailRefreshKey += 1
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
                 mapLibreMap.addOnMapClickListener { point ->
+                    if (SystemClock.uptimeMillis() < overlayTapBlockedUntilMs.get()) {
+                        return@addOnMapClickListener true
+                    }
                     runCatching {
                         mapLibreMap.handlePhotoMapClick(
                             point = point,
@@ -427,7 +445,9 @@ private fun PhotoMapLibreMap(
                     isStyleReady = true
                     styleGeneration += 1
                     thumbnailRefreshKey += 1
-                    mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    post {
+                        mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                    }
                 }
             }
         }
@@ -437,7 +457,12 @@ private fun PhotoMapLibreMap(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    mapView.onResume()
+                    mapView.post {
+                        map?.dispatchViewportChanged(latestOnViewportChanged.value)
+                    }
+                }
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 Lifecycle.Event.ON_STOP -> mapView.onStop()
                 else -> Unit
@@ -522,9 +547,25 @@ private fun PhotoMapLibreMap(
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
                 hasFitCamera = true
+                mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                mapView.postDelayed(
+                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    MapViewportRefreshDelayMs
+                )
             }.onFailure { error ->
                 Log.e(PhotoMapLogTag, "Initial camera fit failed", error)
             }
+        }
+    }
+
+    LaunchedEffect(map, isStyleReady, photosById.size, dateFilter, clusterSettings) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady) {
+            return@LaunchedEffect
+        }
+
+        mapView.post {
+            mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
         }
     }
 
@@ -537,6 +578,11 @@ private fun PhotoMapLibreMap(
         mapView.post {
             runCatching {
                 mapLibreMap.fitPositions(cameraPositions, MapBoundsPaddingPx)
+                mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
+                mapView.postDelayed(
+                    { mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value) },
+                    MapViewportRefreshDelayMs
+                )
             }.onFailure { error ->
                 Log.e(PhotoMapLogTag, "Manual camera fit failed", error)
             }
@@ -553,6 +599,7 @@ private fun PhotoMapLibreMap(
             renderState = mapRenderState,
             photosById = photosById,
             markerScalePercent = clusterSettings.markerScalePercent,
+            isTapBlocked = { SystemClock.uptimeMillis() < overlayTapBlockedUntilMs.get() },
             onMarkerTap = { item ->
                 map?.handlePhotoMapRenderItemTap(
                     renderItem = item,
@@ -595,7 +642,8 @@ private fun PhotoMapLibreMap(
                 dateFilter = dateFilter,
                 onDensityChanged = onClusterDensityChanged,
                 onDateFilterChanged = onDateFilterChanged,
-                onDateFilterReset = onDateFilterReset
+                onDateFilterReset = onDateFilterReset,
+                onOpenTrips = onOpenTrips
             )
         }
     }
@@ -606,6 +654,7 @@ private fun MapMarkerOverlay(
     renderState: PhotoMapRenderState,
     photosById: Map<Long, DevicePhoto>,
     markerScalePercent: Int,
+    isTapBlocked: () -> Boolean,
     onMarkerTap: (PhotoMapRenderItem) -> Boolean
 ) {
     val density = LocalDensity.current
@@ -637,7 +686,11 @@ private fun MapMarkerOverlay(
                     item = item,
                     photo = representativePhoto,
                     sizePx = clusterSizePx,
-                    onClick = { onMarkerTap(item) },
+                    onClick = {
+                        if (!isTapBlocked()) {
+                            onMarkerTap(item)
+                        }
+                    },
                     modifier = Modifier
                         .offset {
                             markerOffset(
@@ -658,18 +711,22 @@ private fun MapMarkerOverlay(
                 if (photo != null) {
                     MapPhotoMarker(
                         photo = photo,
-                        onClick = { onMarkerTap(item) },
+                        onClick = {
+                            if (!isTapBlocked()) {
+                                onMarkerTap(item)
+                            }
+                        },
                         modifier = Modifier
                             .offset {
-                            markerOffset(
-                                screenX = item.screenX,
-                                screenY = item.screenY,
-                                markerSizePx = photoSizePx,
-                                viewportWidth = renderState.viewportWidth,
-                                viewportHeight = renderState.viewportHeight
-                            )
-                        }
-                        .size(photoSize)
+                                markerOffset(
+                                    screenX = item.screenX,
+                                    screenY = item.screenY,
+                                    markerSizePx = photoSizePx,
+                                    viewportWidth = renderState.viewportWidth,
+                                    viewportHeight = renderState.viewportHeight
+                                )
+                            }
+                            .size(photoSize)
                     )
                 }
             }
@@ -911,6 +968,7 @@ private fun MapFabControls(
     onDensityChanged: (Int) -> Unit,
     onDateFilterChanged: (Long, Long) -> Unit,
     onDateFilterReset: () -> Unit,
+    onOpenTrips: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedPanel by remember { mutableStateOf<MapFabPanel?>(null) }
@@ -968,6 +1026,19 @@ private fun MapFabControls(
                         )
                         Text(
                             text = "${clusterSettings.densityCoefficientPercent}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                FloatingActionButton(onClick = onOpenTrips) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Поездки",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Medium
                         )
@@ -3295,6 +3366,9 @@ private data class BottomGalleryZoomTarget(
 )
 
 private const val MapBoundsPaddingPx = 120
+private const val MapViewportRefreshDelayMs = 350L
+private const val MapGestureTapBlockMs = 450L
+private const val MapMoveReprojectionThrottleMs = 32L
 private const val InitialSinglePhotoZoom = 14.0
 private const val MapTapHitSlopPx = 84f
 private const val BottomGalleryThumbnailPx = 160

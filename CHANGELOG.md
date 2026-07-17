@@ -8,6 +8,22 @@
 
 Изменений пока нет.
 
+## [0.8.1] - 2026-07-17
+
+### Added
+
+* Added date picker access from the date range labels for precise start and end date selection.
+* Added month and year tick marks behind the map date range slider.
+
+### Changed
+
+* The date range slider now zooms its visible scale around the selected range and expands back toward the full date span when dragged to the edges.
+* Date range slider handles now snap to nearby month, year, and boundary ticks.
+
+### Fixed
+
+* The map no longer shows the "Нет фотографий с геопозицией" empty state when an active date filter simply hides all visible photos.
+
 ## [0.8.0] - 2026-07-17
 
 ### Added

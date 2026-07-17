@@ -136,12 +136,17 @@ fun TripMapScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 TripMapTopBar(
+                    modifier = Modifier.zIndex(2f),
                     tripCount = tripMarkers.size,
                     isSegmenting = isSegmenting,
                     onBack = onBack,
                     onRefreshTrips = onRefreshTrips
                 )
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds()
+                ) {
                     TripMapLibreMap(
                         tripMarkers = tripMarkers,
                         photosById = photosById,
@@ -446,13 +451,14 @@ private fun TripDetailsEmptyRouteMessage() {
 
 @Composable
 private fun TripMapTopBar(
+    modifier: Modifier = Modifier,
     tripCount: Int,
     isSegmenting: Boolean,
     onBack: () -> Unit,
     onRefreshTrips: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         color = Color(0xFF101420),
         contentColor = Color.White,
         shadowElevation = 4.dp
@@ -642,6 +648,7 @@ private fun TripYearScrubber(
         modifier = modifier
             .width(TripYearScrubberWidth)
             .height(TripYearScrubberViewportHeight)
+            .clipToBounds()
             .onSizeChanged { size -> scrubberSize = size }
             .pointerInput(scrubberItems, scrubberSize) {
                 detectTapGestures { offset -> focusAt(offset.y) }

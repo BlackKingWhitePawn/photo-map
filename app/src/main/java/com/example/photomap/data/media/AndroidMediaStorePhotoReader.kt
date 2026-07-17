@@ -30,6 +30,7 @@ class AndroidMediaStorePhotoReader(
     private val contentResolver: ContentResolver = context.applicationContext.contentResolver
     private val exifLocationReader = ExifLocationReader(contentResolver)
     private val photoIndexDatabase = PhotoIndexDatabase(appContext)
+    private val scanState = appContext.getSharedPreferences(ScanStateName, Context.MODE_PRIVATE)
 
     override suspend fun readPhotos(
         readExifLocation: Boolean,
@@ -37,7 +38,6 @@ class AndroidMediaStorePhotoReader(
         onBatchIndexed: (List<DevicePhoto>) -> Unit,
         onProgress: (PhotoReadProgress) -> Unit
     ): PhotoReadResult = withContext(ioDispatcher) {
-        val photos = mutableListOf<DevicePhoto>()
         val photosToPersist = mutableListOf<IndexedPhoto>()
         val currentMediaIds = mutableSetOf<Long>()
         val cachedPhotos = photoIndexDatabase.getAllPhotosById()
@@ -46,6 +46,8 @@ class AndroidMediaStorePhotoReader(
             PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
         var currentLocationScannedCount = startIndexStats.locationScannedCount
         var lastProgressReportAt = 0L
+        var processed = 0
+        var total = 0
 
         fun reportProgress(processed: Int, total: Int, force: Boolean = false) {
             val now = SystemClock.elapsedRealtime()
@@ -70,6 +72,13 @@ class AndroidMediaStorePhotoReader(
             val indexedBatch = photosToPersist.toList()
             photoIndexDatabase.upsertPhotos(indexedBatch)
             photosToPersist.clear()
+            if (readExifLocation) {
+                saveExifScanResumeState(
+                    processed = processed,
+                    total = total,
+                    lastMediaId = indexedBatch.lastOrNull()?.mediaId
+                )
+            }
             onBatchIndexed(indexedBatch.map { photo -> photo.toDevicePhoto() })
         }
 
@@ -81,10 +90,15 @@ class AndroidMediaStorePhotoReader(
                 null,
                 "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
             )?.use { cursor ->
-                val total = cursor.count
-                var processed = 0
+                total = cursor.count
+                val resumeStartPosition = cursor.findExifResumeStartPosition(
+                    resumeState = if (readExifLocation) readExifScanResumeState() else null,
+                    total = total
+                )
+                processed = resumeStartPosition
                 reportProgress(processed = processed, total = total, force = true)
 
+                cursor.moveToPosition(-1)
                 while (cursor.moveToNext()) {
                     currentCoroutineContext().ensureActive()
                     scanControl.awaitIfPaused()
@@ -92,6 +106,9 @@ class AndroidMediaStorePhotoReader(
 
                     val currentPhoto = cursor.toDevicePhotoMetadata()
                     currentMediaIds += currentPhoto.mediaId
+                    if (cursor.position < resumeStartPosition) {
+                        continue
+                    }
 
                     val cachedPhoto = cachedPhotos[currentPhoto.mediaId]
                     val indexedPhoto = currentPhoto.resolveIndexedPhoto(
@@ -99,7 +116,6 @@ class AndroidMediaStorePhotoReader(
                         readExifLocation = readExifLocation,
                         canReadOriginalLocation = canReadOriginalLocation
                     )
-                    photos += indexedPhoto.toDevicePhoto()
                     photosToPersist += indexedPhoto
                     processed += 1
 
@@ -116,21 +132,31 @@ class AndroidMediaStorePhotoReader(
 
                 persistBatch()
                 photoIndexDatabase.deleteMissingPhotos(currentMediaIds)
+                if (readExifLocation) {
+                    clearExifScanResumeState()
+                }
             }
         } catch (cancellationException: CancellationException) {
+            persistBatch()
             throw cancellationException
         } catch (securityException: SecurityException) {
+            persistBatch()
             Log.w(Tag, "No permission to read images from MediaStore", securityException)
         } catch (exception: RuntimeException) {
+            persistBatch()
             Log.w(Tag, "Unable to read images from MediaStore", exception)
         }
 
+        val indexedPhotos = photoIndexDatabase.getAllPhotosById()
+            .values
+            .map { photo -> photo.toDevicePhoto() }
+            .sortedByNewestFirst()
         Log.i(
             Tag,
-            "MediaStore scan finished: ${photos.size} photos, withLocation=${photos.count { it.hasLocation }}, readExifLocation=$readExifLocation"
+            "MediaStore scan finished: ${indexedPhotos.size} photos, withLocation=${indexedPhotos.count { it.hasLocation }}, readExifLocation=$readExifLocation"
         )
         PhotoReadResult(
-            photos = photos,
+            photos = indexedPhotos,
             indexStats = photoIndexDatabase.getStats()
         )
     }
@@ -228,8 +254,79 @@ class AndroidMediaStorePhotoReader(
         return if (index >= 0 && !isNull(index)) getDouble(index) else null
     }
 
+    private fun Cursor.findExifResumeStartPosition(
+        resumeState: ExifScanResumeState?,
+        total: Int
+    ): Int {
+        val state = resumeState ?: return 0
+        if (state.total != total || state.processed <= 0) {
+            return 0
+        }
+
+        val processed = state.processed.coerceAtMost(total)
+        if (processed >= total) {
+            return total
+        }
+
+        val expectedPosition = processed - 1
+        if (!moveToPosition(expectedPosition)) {
+            return 0
+        }
+
+        val mediaId = getLongValue(MediaStore.Images.Media._ID)
+        return if (mediaId == state.lastMediaId) processed else 0
+    }
+
+    private fun readExifScanResumeState(): ExifScanResumeState? {
+        if (!scanState.contains(ExifResumeProcessedKey)) {
+            return null
+        }
+
+        val processed = scanState.getInt(ExifResumeProcessedKey, 0)
+        val total = scanState.getInt(ExifResumeTotalKey, 0)
+        val lastMediaId = scanState.getLong(ExifResumeLastMediaIdKey, MissingMediaId)
+        return if (processed > 0 && total > 0 && lastMediaId != MissingMediaId) {
+            ExifScanResumeState(
+                processed = processed,
+                total = total,
+                lastMediaId = lastMediaId
+            )
+        } else {
+            null
+        }
+    }
+
+    private fun saveExifScanResumeState(
+        processed: Int,
+        total: Int,
+        lastMediaId: Long?
+    ) {
+        if (processed <= 0 || total <= 0 || lastMediaId == null) {
+            return
+        }
+
+        scanState.edit()
+            .putInt(ExifResumeProcessedKey, processed.coerceAtMost(total))
+            .putInt(ExifResumeTotalKey, total)
+            .putLong(ExifResumeLastMediaIdKey, lastMediaId)
+            .commit()
+    }
+
+    private fun clearExifScanResumeState() {
+        scanState.edit()
+            .remove(ExifResumeProcessedKey)
+            .remove(ExifResumeTotalKey)
+            .remove(ExifResumeLastMediaIdKey)
+            .commit()
+    }
+
     private companion object {
         const val Tag = "PhotoMapMediaStore"
+        const val ScanStateName = "photo_map_scan_state"
+        const val ExifResumeProcessedKey = "exif_resume_processed"
+        const val ExifResumeTotalKey = "exif_resume_total"
+        const val ExifResumeLastMediaIdKey = "exif_resume_last_media_id"
+        const val MissingMediaId = -1L
 
         val Projection = arrayOf(
             MediaStore.Images.Media._ID,
@@ -252,6 +349,12 @@ class AndroidMediaStorePhotoReader(
         const val ProgressReportIntervalMs = 100L
     }
 }
+
+private data class ExifScanResumeState(
+    val processed: Int,
+    val total: Int,
+    val lastMediaId: Long
+)
 
 private fun List<DevicePhoto>.sortedByNewestFirst(): List<DevicePhoto> {
     return sortedWith(

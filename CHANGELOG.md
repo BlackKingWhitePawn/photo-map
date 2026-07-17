@@ -16,6 +16,8 @@
 * Fixed overlay markers during map movement: marker positions now reproject while the camera moves, but cluster composition is recalculated only after camera idle.
 * Fixed map lag and visual clutter by compacting nearby dense marker groups into larger screen clusters.
 * Fixed single-photo map markers so square thumbnails are no longer clipped by a circular marker shape.
+* Fixed EXIF scanning so newly indexed geotagged photos appear on the map during scanning, and cancelled EXIF scans resume from the last saved mark when started again.
+* Changed the first gallery permission grant to start GPS lookup in EXIF immediately instead of waiting for a separate deep scan action.
 
 ## [0.7.0] - 2026-07-16
 

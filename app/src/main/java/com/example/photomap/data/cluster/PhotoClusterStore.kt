@@ -7,8 +7,11 @@ import com.example.photomap.core.util.AppDiagnostics
 import com.example.photomap.data.local.PhotoIndexDatabase
 import com.example.photomap.data.local.toDevicePhoto
 import com.example.photomap.domain.model.DevicePhoto
+import com.example.photomap.domain.model.PhotoDateFilter
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 class PhotoClusterStore(
@@ -27,6 +30,7 @@ class PhotoClusterStore(
             photos = locatedPhotos,
             settings = settings.normalized()
         )
+        currentCoroutineContext().ensureActive()
         database.replaceClusters(
             clusters = builtClusters.clusters,
             links = builtClusters.links
@@ -51,13 +55,13 @@ class PhotoClusterStore(
     suspend fun loadVisibleMapContent(
         bounds: PhotoMapBounds,
         zoom: Double,
-        settings: PhotoClusterSettings
+        settings: PhotoClusterSettings,
+        dateFilter: PhotoDateFilter = PhotoDateFilter()
     ): VisiblePhotoMapContent = withContext(ioDispatcher) {
         val level = clusterLevelForZoom(zoom)
         val expandedBounds = bounds.expanded(ViewportPaddingFactor)
-        rebuildClustersIfOutdated(database.getAllPhotosById().values.map { photo -> photo.toDevicePhoto() }, settings)
         val items = if (level == 0) {
-            database.getPhotosInBounds(expandedBounds)
+            database.getPhotosInBounds(expandedBounds, dateFilter)
                 .asSequence()
                 .map { photo -> photo.toDevicePhoto() }
                 .mapNotNull { photo ->

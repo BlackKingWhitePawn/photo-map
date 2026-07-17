@@ -49,6 +49,9 @@ import com.example.photomap.data.media.AndroidMediaStorePhotoReader
 import com.example.photomap.data.media.DevicePhotoReader
 import com.example.photomap.data.media.PhotoReadControl
 import com.example.photomap.domain.model.DevicePhoto
+import com.example.photomap.domain.model.PhotoDateFilter
+import com.example.photomap.domain.model.buildPhotoDateFilter
+import com.example.photomap.domain.model.matchesPhotoDateFilter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +67,9 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
     private val scanPauseState = MutableStateFlow(false)
     private var scanJob: Job? = null
     private var clusterRebuildJob: Job? = null
+    private var visibleMapLoadJob: Job? = null
+    private var clusterGeneration = 0L
+    private var viewportLoadGeneration = 0L
     private var loadedClusterBounds: PhotoMapBounds? = null
     private var loadedClusterLevel: Int? = null
     private var lastViewportBounds: PhotoMapBounds? = null
@@ -173,6 +179,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 }
                 val photos = result.photos.sortedByNewestFirst()
                 val resultStats = result.indexStats
+                val dateFilter = buildDateFilterFor(photos)
 
                 _uiState.update { state ->
                     state.copy(
@@ -181,12 +188,13 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                         photosWithLocationCount = photos.count { photo -> photo.hasLocation },
                         indexedLocationScannedCount = resultStats.locationScannedCount,
                         indexedPhotoCount = resultStats.totalCount,
+                        dateFilter = dateFilter,
                         isLoading = false,
                         isScanPaused = false,
                         loadingMessage = null
                     )
                 }
-                rebuildClusters(photos)
+                rebuildClusters(photos = photos, dateFilter = dateFilter)
             } catch (cancellationException: CancellationException) {
                 _uiState.update { state ->
                     state.copy(
@@ -369,21 +377,60 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    fun setMapDateFilter(startDay: Long, endDay: Long) {
+        val currentFilter = uiState.value.dateFilter
+        val nextFilter = currentFilter.withSelectedDays(startDay, endDay)
+        if (nextFilter == currentFilter) {
+            return
+        }
+
+        _uiState.update { state ->
+            state.copy(dateFilter = nextFilter)
+        }
+        rebuildClusters(dateFilter = nextFilter)
+    }
+
+    fun resetMapDateFilter() {
+        val currentFilter = uiState.value.dateFilter
+        val nextFilter = currentFilter.reset()
+        if (nextFilter == currentFilter) {
+            return
+        }
+
+        _uiState.update { state ->
+            state.copy(dateFilter = nextFilter)
+        }
+        rebuildClusters(dateFilter = nextFilter)
+    }
+
     fun onMapViewportChanged(bounds: PhotoMapBounds, zoom: Double) {
         lastViewportBounds = bounds
         lastViewportZoom = zoom
+        if (clusterRebuildJob?.isActive == true) {
+            return
+        }
+
         val requestedLevel = clusterLevelForZoom(zoom)
         val currentLoadedBounds = loadedClusterBounds
         if (loadedClusterLevel == requestedLevel && currentLoadedBounds?.contains(bounds) == true) {
             return
         }
 
-        viewModelScope.launch {
+        visibleMapLoadJob?.cancel()
+        viewportLoadGeneration += 1L
+        val generation = clusterGeneration
+        val viewportGeneration = viewportLoadGeneration
+        visibleMapLoadJob = viewModelScope.launch {
+            val stateSnapshot = uiState.value
             val content = clusterStore.loadVisibleMapContent(
                 bounds = bounds,
                 zoom = zoom,
-                settings = uiState.value.clusterSettings
+                settings = stateSnapshot.clusterSettings,
+                dateFilter = stateSnapshot.dateFilter
             )
+            if (generation != clusterGeneration || viewportGeneration != viewportLoadGeneration) {
+                return@launch
+            }
             loadedClusterBounds = content.loadedBounds
             loadedClusterLevel = content.level
             _uiState.update { state ->
@@ -399,18 +446,17 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             val photos = photoReader.readIndexedPhotos()
             val stats = photoReader.getIndexStats()
+            val dateFilter = buildDateFilterFor(photos)
             _uiState.update { state ->
                 state.copy(
                     photos = photos,
                     photosWithLocationCount = stats.locationCount,
                     indexedLocationScannedCount = stats.locationScannedCount,
-                    indexedPhotoCount = stats.totalCount
+                    indexedPhotoCount = stats.totalCount,
+                    dateFilter = dateFilter
                 )
             }
-            clusterStore.rebuildClustersIfOutdated(
-                photos = photos,
-                settings = uiState.value.clusterSettings
-            )
+            rebuildClusters(photos = photos, dateFilter = dateFilter)
         }
     }
 
@@ -420,47 +466,74 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         var mergedPhotos = emptyList<DevicePhoto>()
+        var nextDateFilter = uiState.value.dateFilter
         _uiState.update { state ->
             val photos = (state.photos + batch).distinctByNewestRevision()
+            nextDateFilter = buildDateFilterFor(photos, state.dateFilter)
             mergedPhotos = photos
             state.copy(
                 photos = photos,
-                photosWithLocationCount = photos.count { photo -> photo.hasLocation }
+                photosWithLocationCount = photos.count { photo -> photo.hasLocation },
+                dateFilter = nextDateFilter
             )
         }
 
         if (batch.any { photo -> photo.hasLocation }) {
-            refreshClustersForProgressiveScan(mergedPhotos)
+            refreshClustersForProgressiveScan(photos = mergedPhotos, dateFilter = nextDateFilter)
         }
     }
 
-    private fun refreshClustersForProgressiveScan(photos: List<DevicePhoto>) {
+    private fun refreshClustersForProgressiveScan(
+        photos: List<DevicePhoto>,
+        dateFilter: PhotoDateFilter
+    ) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastProgressiveClusterRefreshAt < ProgressiveClusterRefreshIntervalMs) {
             return
         }
 
         lastProgressiveClusterRefreshAt = now
-        rebuildClusters(photos)
+        rebuildClusters(photos = photos, dateFilter = dateFilter)
     }
 
-    private fun rebuildClusters(photos: List<DevicePhoto> = uiState.value.photos) {
+    private fun rebuildClusters(
+        photos: List<DevicePhoto> = uiState.value.photos,
+        dateFilter: PhotoDateFilter = uiState.value.dateFilter
+    ) {
         loadedClusterBounds = null
         loadedClusterLevel = null
+        clusterGeneration += 1L
+        viewportLoadGeneration += 1L
+        val generation = clusterGeneration
         clusterRebuildJob?.cancel()
-        clusterRebuildJob = viewModelScope.launch {
-            clusterStore.rebuildClusters(
-                photos = photos,
-                settings = uiState.value.clusterSettings
+        visibleMapLoadJob?.cancel()
+        _uiState.update { state ->
+            state.copy(
+                visibleMapItems = emptyList(),
+                visibleMapLevel = 0
             )
+        }
+        clusterRebuildJob = viewModelScope.launch {
+            val settingsSnapshot = uiState.value.clusterSettings
+            clusterStore.rebuildClusters(
+                photos = photos.filter { photo -> photo.matchesPhotoDateFilter(dateFilter) },
+                settings = settingsSnapshot
+            )
+            if (generation != clusterGeneration) {
+                return@launch
+            }
             val bounds = lastViewportBounds
             val zoom = lastViewportZoom
             if (bounds != null && zoom != null) {
                 val content = clusterStore.loadVisibleMapContent(
                     bounds = bounds,
                     zoom = zoom,
-                    settings = uiState.value.clusterSettings
+                    settings = settingsSnapshot,
+                    dateFilter = dateFilter
                 )
+                if (generation != clusterGeneration) {
+                    return@launch
+                }
                 loadedClusterBounds = content.loadedBounds
                 loadedClusterLevel = content.level
                 _uiState.update { state ->
@@ -478,6 +551,16 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 }
             }
         }
+    }
+
+    private fun buildDateFilterFor(
+        photos: List<DevicePhoto>,
+        currentFilter: PhotoDateFilter = uiState.value.dateFilter
+    ): PhotoDateFilter {
+        return buildPhotoDateFilter(
+            photos = photos.filter { photo -> photo.hasLocation },
+            current = currentFilter
+        )
     }
 
     private companion object {

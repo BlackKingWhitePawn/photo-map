@@ -5,8 +5,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.example.photomap.domain.model.matchesPhotoDateFilter
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.photomap.BuildConfig
 import com.example.photomap.ui.map.PhotoMapScreen
@@ -43,6 +45,10 @@ fun PhotoMapApp(
         navigateBack()
     }
 
+    val mapPhotos = remember(state.photos, state.dateFilter) {
+        state.photos.filter { photo -> photo.matchesPhotoDateFilter(state.dateFilter) }
+    }
+
     when (currentScreen) {
         AppScreen.Photos -> PhotoAccessRoute(
             viewModel = viewModel,
@@ -51,10 +57,11 @@ fun PhotoMapApp(
         )
 
         AppScreen.Map -> PhotoMapScreen(
-            photos = state.photos,
+            photos = mapPhotos,
             mapItems = state.visibleMapItems,
             mapStyleUrl = BuildConfig.MAP_STYLE_URL,
             clusterSettings = state.clusterSettings,
+            dateFilter = state.dateFilter,
             showDebugPanel = state.showMapDebugPanel,
             isScanning = state.isLoading,
             isScanPaused = state.isScanPaused,
@@ -65,6 +72,8 @@ fun PhotoMapApp(
             onCancel = viewModel::cancelCurrentAction,
             onOpenSettings = { navigateTo(AppScreen.Settings) },
             onClusterDensityChanged = viewModel::setClusterDensityCoefficientPercent,
+            onDateFilterChanged = viewModel::setMapDateFilter,
+            onDateFilterReset = viewModel::resetMapDateFilter,
             onViewportChanged = viewModel::onMapViewportChanged
         )
 

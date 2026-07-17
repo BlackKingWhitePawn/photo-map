@@ -5,6 +5,7 @@ import com.example.photomap.core.permissions.PhotoPermissionStatus
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.data.cluster.VisiblePhotoMapItem
 import com.example.photomap.domain.model.DevicePhoto
+import com.example.photomap.domain.model.PhotoDateFilter
 
 data class PhotoAccessUiState(
     val permissionStatus: PhotoPermissionStatus = PhotoPermissionStatus(
@@ -24,6 +25,7 @@ data class PhotoAccessUiState(
     val scanProcessed: Int = 0,
     val scanTotal: Int = 0,
     val clusterSettings: PhotoClusterSettings = PhotoClusterSettings(),
+    val dateFilter: PhotoDateFilter = PhotoDateFilter(),
     val showMapDebugPanel: Boolean = false,
     val hasRequestedPermissions: Boolean = false,
     val errorMessage: String? = null

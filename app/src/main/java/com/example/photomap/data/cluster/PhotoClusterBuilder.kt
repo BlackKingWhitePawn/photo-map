@@ -2,6 +2,8 @@ package com.example.photomap.data.cluster
 
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.domain.model.DevicePhoto
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
@@ -11,7 +13,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class PhotoClusterBuilder {
-    fun build(
+    suspend fun build(
         photos: Collection<DevicePhoto>,
         settings: PhotoClusterSettings,
         updatedAt: Long = System.currentTimeMillis()
@@ -34,7 +36,8 @@ class PhotoClusterBuilder {
         val links = mutableListOf<PhotoClusterLink>()
         var parentByPhotoId = emptyMap<Long, String>()
 
-        StoredClusterLevels.forEach { level ->
+        for (level in StoredClusterLevels) {
+            currentCoroutineContext().ensureActive()
             val levelClusters = if (level <= 6) {
                 buildCellClusters(
                     level = level,
@@ -59,7 +62,7 @@ class PhotoClusterBuilder {
         return BuiltPhotoClusters(clusters = clusters, links = links)
     }
 
-    private fun buildCellClusters(
+    private suspend fun buildCellClusters(
         level: Int,
         points: List<ClusterPoint>,
         parentByPhotoId: Map<Long, String>,
@@ -67,29 +70,34 @@ class PhotoClusterBuilder {
     ): BuiltPhotoClusters {
         val clusters = mutableListOf<StoredPhotoCluster>()
         val links = mutableListOf<PhotoClusterLink>()
-        points.groupBy { point -> point.geoCell(level) }
+        val groupedPoints = points.groupBy { point -> point.geoCell(level) }
             .toSortedMap(compareBy<GeoCell> { cell -> cell.key })
-            .forEach { (cell, cellPoints) ->
-                val cluster = cellPoints.toStoredCluster(
-                    level = level,
-                    h3Index = cell.key,
-                    clusterId = "v$CLUSTERING_VERSION-l$level-${cell.key}",
-                    parentClusterId = cellPoints.mostCommonParent(parentByPhotoId),
-                    updatedAt = updatedAt
-                )
-                clusters += cluster
-                links += cellPoints.map { point ->
-                    PhotoClusterLink(
-                        photoId = point.photoId,
-                        clusterId = cluster.clusterId,
-                        level = level
-                    )
-                }
+        var groupIndex = 0
+        for ((cell, cellPoints) in groupedPoints) {
+            if (groupIndex % BuilderCancellationCheckInterval == 0) {
+                currentCoroutineContext().ensureActive()
             }
+            groupIndex += 1
+            val cluster = cellPoints.toStoredCluster(
+                level = level,
+                h3Index = cell.key,
+                clusterId = "v$CLUSTERING_VERSION-l$level-${cell.key}",
+                parentClusterId = cellPoints.mostCommonParent(parentByPhotoId),
+                updatedAt = updatedAt
+            )
+            clusters += cluster
+            links += cellPoints.map { point ->
+                PhotoClusterLink(
+                    photoId = point.photoId,
+                    clusterId = cluster.clusterId,
+                    level = level
+                )
+            }
+        }
         return BuiltPhotoClusters(clusters = clusters, links = links)
     }
 
-    private fun buildAdaptiveClusters(
+    private suspend fun buildAdaptiveClusters(
         level: Int,
         points: List<ClusterPoint>,
         settings: PhotoClusterSettings,
@@ -100,37 +108,42 @@ class PhotoClusterBuilder {
         val links = mutableListOf<PhotoClusterLink>()
         val densityCoefficient = settings.densityCoefficientPercent.coerceIn(80, 320) / 100.0
         val maxDiameterKm = maxDiameterKmForLevel(level, densityCoefficient)
-        points.groupBy { point -> point.geoCell(level) }
+        val groupedPoints = points.groupBy { point -> point.geoCell(level) }
             .toSortedMap(compareBy<GeoCell> { cell -> cell.key })
-            .forEach { (cell, cellPoints) ->
-                val components = adaptiveComponents(
-                    points = cellPoints,
-                    densityCoefficient = densityCoefficient,
-                    maxDiameterKm = maxDiameterKm,
-                    minPoints = settings.minPoints.coerceAtLeast(2)
+        var groupIndex = 0
+        for ((cell, cellPoints) in groupedPoints) {
+            if (groupIndex % BuilderCancellationCheckInterval == 0) {
+                currentCoroutineContext().ensureActive()
+            }
+            groupIndex += 1
+            val components = adaptiveComponents(
+                points = cellPoints,
+                densityCoefficient = densityCoefficient,
+                maxDiameterKm = maxDiameterKm,
+                minPoints = settings.minPoints.coerceAtLeast(2)
+            )
+            components.forEachIndexed { index, component ->
+                val cluster = component.toStoredCluster(
+                    level = level,
+                    h3Index = cell.key,
+                    clusterId = "v$CLUSTERING_VERSION-l$level-${cell.key}-c$index",
+                    parentClusterId = component.mostCommonParent(parentByPhotoId),
+                    updatedAt = updatedAt
                 )
-                components.forEachIndexed { index, component ->
-                    val cluster = component.toStoredCluster(
-                        level = level,
-                        h3Index = cell.key,
-                        clusterId = "v$CLUSTERING_VERSION-l$level-${cell.key}-c$index",
-                        parentClusterId = component.mostCommonParent(parentByPhotoId),
-                        updatedAt = updatedAt
+                clusters += cluster
+                links += component.map { point ->
+                    PhotoClusterLink(
+                        photoId = point.photoId,
+                        clusterId = cluster.clusterId,
+                        level = level
                     )
-                    clusters += cluster
-                    links += component.map { point ->
-                        PhotoClusterLink(
-                            photoId = point.photoId,
-                            clusterId = cluster.clusterId,
-                            level = level
-                        )
-                    }
                 }
             }
+        }
         return BuiltPhotoClusters(clusters = clusters, links = links)
     }
 
-    private fun adaptiveComponents(
+    private suspend fun adaptiveComponents(
         points: List<ClusterPoint>,
         densityCoefficient: Double,
         maxDiameterKm: Double,
@@ -140,7 +153,12 @@ class PhotoClusterBuilder {
             return points.map { point -> listOf(point) }
         }
 
-        val radii = points.mapIndexed { index, point ->
+        val radii = mutableListOf<Double>()
+        for (index in points.indices) {
+            if (index % BuilderCancellationCheckInterval == 0) {
+                currentCoroutineContext().ensureActive()
+            }
+            val point = points[index]
             val thirdNeighborDistance = points.asSequence()
                 .filterIndexed { otherIndex, _ -> otherIndex != index }
                 .map { other -> point.distanceKmTo(other) }
@@ -152,11 +170,14 @@ class PhotoClusterBuilder {
                     .map { other -> point.distanceKmTo(other) }
                     .minOrNull()
                 ?: maxDiameterKm
-            adaptiveRadiusKm(thirdNeighborDistance, densityCoefficient, maxDiameterKm)
+            radii += adaptiveRadiusKm(thirdNeighborDistance, densityCoefficient, maxDiameterKm)
         }
 
         val unionFind = UnionFind(points.size)
         for (firstIndex in points.indices) {
+            if (firstIndex % BuilderCancellationCheckInterval == 0) {
+                currentCoroutineContext().ensureActive()
+            }
             for (secondIndex in firstIndex + 1 until points.size) {
                 val distanceKm = points[firstIndex].distanceKmTo(points[secondIndex])
                 val thresholdKm = minOf(maxDiameterKm, max(radii[firstIndex], radii[secondIndex]))
@@ -360,4 +381,5 @@ private class UnionFind(size: Int) {
     }
 }
 
+private const val BuilderCancellationCheckInterval = 64
 private const val EarthRadiusKm = 6371.0

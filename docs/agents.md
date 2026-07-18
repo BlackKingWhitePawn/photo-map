@@ -47,7 +47,7 @@
 * архитектура: MVVM;
 * один модуль `app` для первой версии;
 * package name: `com.example.photomap`;
-* название приложения: `Photo Map`;
+* название приложения: `Traverse`;
 * язык интерфейса первой версии: русский;
 * ориентация: портретная и альбомная;
 * приложение должно корректно работать после поворота экрана;
@@ -1033,7 +1033,7 @@ MVP считается готовым, если:
 
 1. Prepare releases only from a named branch that matches the current work scope.
 2. For every release, bump `versionName` and `versionCode` in `app/build.gradle.kts`.
-3. Update `CHANGELOG.md` and add `release-notes/v<version>.md` using exactly these release note sections: `# Photo Map v<version>`, `Date`, `Added`, `Changed`, `Fixed`, `Version`.
+3. Update `CHANGELOG.md` and add `release-notes/v<version>.md` using exactly these release note sections: `# Traverse v<version>`, `Date`, `Added`, `Changed`, `Fixed`, `Version`.
 4. Verify the APK with `aapt2 dump badging` and `aapt2 dump permissions`.
 5. Record APK metadata inside the `Version` section of release notes: package name, `versionCode`, `versionName`, min SDK, target SDK, permission list, APK asset path, size, SHA-256, signature status, and certificate SHA-256 fingerprint. Do not add separate `Checks`, `APK`, `Permissions`, or `Known Limitations` sections. Never record `signer DN` in release notes, changelog, PR, or other public docs.
 6. Never add APK, AAB, keystore, signing files, `.gradle-home/`, or build outputs to Git.

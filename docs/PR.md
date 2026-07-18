@@ -1,38 +1,47 @@
-# PR: Release v0.11.0 home screen
+# PR: Release v1.0.0
 
 ## Summary
 
-* Added a new `home` start screen for the app.
-* Added a compact MapLibre heatmap preview using existing ready trip heat cells.
-* Added a featured trips carousel with cover thumbnails, date ranges, and photo counts.
-* Added popular places cards built from already indexed local photos with coordinates.
-* Added all-places and place-details routes.
-* Added place details with photo mini-galleries grouped by day.
-* Added an "On this day in the past" section with a map preview and thumbnails.
-* Extracted reusable `MiniPhotoGallery` and `MiniPhotoThumbnail` components.
-* Changed permission success navigation to return to the home screen.
-* Bumped Android metadata to `versionName=0.11.0`, `versionCode=17`.
+* Bumped Android metadata to `versionName=1.0.0`, `versionCode=19`.
+* Renamed the visible app brand to `Traverse`.
+* Added a real MapLibre trip heatmap preview to the home gallery geography widget.
+* Removed country borders and country labels from the compact home heatmap preview.
+* Replaced wrench-style settings icons with a dedicated gear drawable.
+* Updated trip export images to use the trip's first photo as the background.
+* Removed the trip export confidence metric.
+* Simplified settings by removing algorithm tuning, debug controls, and diagnostic log export.
+* Reworked map bottom controls into a spaced layout with same-height date and segmented display-mode controls.
+* Added release notes and changelog coverage for `v1.0.0`.
+* Prepared `app/release/traverse-v1.0.0.apk` from the user-built release APK.
 
 ## Scope
 
 Included:
 
-* home dashboard MVP from `mainPage.md`;
-* route wiring for home, all places, and place details;
-* reusable mini-gallery component;
-* local-only UI derived from already indexed photos, trips, and heat cells;
-* release documentation for `v0.11.0`.
+* local UI polish for home, map, settings, permissions, and trip sharing;
+* visible app branding update to Traverse;
+* Android release metadata for `v1.0.0`;
+* release documentation for `v1.0.0`.
 
 Not included:
 
-* persisted places table;
-* place editing;
-* network geocoding for home place cards;
-* new server sync, analytics, or photo write operations.
+* signed release APK build;
+* Play Console upload;
+* git tag creation;
+* remote push;
+* package/class namespace rename from `photomap`/`PhotoMap`.
 
 ## Checks
 
-Per the local project rule, Codex did not run Gradle build, tests, lint, `npx`, `tsc`, or `eslint`.
+Performed without rebuilding the APK:
+
+* `aapt dump badging` confirms `versionCode=19`, `versionName=1.0.0`, package `com.example.photomap`, label `Traverse`, `minSdk=29`, `targetSdk=36`.
+* `aapt dump permissions` captured the APK permission list for release notes.
+* `apksigner verify --print-certs --verbose` confirms the APK verifies with v2 signing and one signer.
+* `zipalign -c -p 4` completed successfully.
+* SHA-256 recorded for `app/release/traverse-v1.0.0.apk`.
+
+Per the local project rule, Codex did not run tests, `npx`, `tsc`, or `eslint`.
 
 ## Safety
 
@@ -48,17 +57,17 @@ The app remains read-only for user photos:
 Target release:
 
 ```text
-v0.11.0
+v1.0.0
 ```
 
 Release notes:
 
 ```text
-release-notes/v0.11.0.md
+release-notes/v1.0.0.md
 ```
 
 APK asset:
 
 ```text
-not built after the v0.11.0 version bump
+app/release/traverse-v1.0.0.apk
 ```

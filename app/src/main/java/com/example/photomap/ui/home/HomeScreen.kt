@@ -4,10 +4,16 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
+import android.graphics.ImageDecoder
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import android.net.Uri
+import android.os.Bundle
+import android.util.Log
+import android.util.Size
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
@@ -49,11 +55,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,8 +75,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.core.content.FileProvider
+import com.example.photomap.R
+import com.example.photomap.data.cluster.PhotoMapBounds
 import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
@@ -78,6 +93,8 @@ import com.example.photomap.ui.components.MiniPhotoThumbnail
 import com.example.photomap.ui.components.PhotoDateGridDay
 import com.example.photomap.ui.components.openMiniGalleryPhoto
 import com.example.photomap.ui.components.photoDateGridGroups
+import com.example.photomap.ui.map.PhotoMapLayerController
+import com.example.photomap.ui.map.TripHeatmapFeatureMapper
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -88,7 +105,13 @@ import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.maplibre.android.MapLibre
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.ln
@@ -125,6 +148,7 @@ data class HomePlaceCardUiModel(
 fun HomeScreen(
     state: PhotoAccessUiState,
     places: List<HomePlaceCardUiModel>,
+    mapStyleUrl: String,
     onOpenMap: () -> Unit,
     onOpenMapForDay: (Long) -> Unit,
     onOpenAllTrips: () -> Unit,
@@ -132,6 +156,7 @@ fun HomeScreen(
     onOpenAllPlaces: () -> Unit,
     onOpenPlace: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onHeatmapViewportChanged: (PhotoMapBounds, Double) -> Unit,
     onRefresh: () -> Unit
 ) {
     val photos = state.photos
@@ -175,8 +200,10 @@ fun HomeScreen(
                         height = heights.heatmapHeight,
                         heatCells = state.visibleTripHeatCells,
                         positions = homePositions,
+                        mapStyleUrl = mapStyleUrl,
                         isLoading = state.isLoading || state.isTripSegmentationRunning,
                         hasTrips = state.tripMarkers.isNotEmpty(),
+                        onViewportChanged = onHeatmapViewportChanged,
                         onOpenMap = onOpenMap
                     )
                 }
@@ -184,6 +211,7 @@ fun HomeScreen(
                     FeaturedTripsSection(
                         trips = featuredTrips,
                         photosById = photosById,
+                        tripPhotoIdsByTripId = state.tripPhotoIdsByTripId,
                         onOpenAllTrips = onOpenAllTrips,
                         onOpenTrip = onOpenTrip
                     )
@@ -588,7 +616,7 @@ private fun HomeTopBarIconActions(
                 }
                 IconButton(onClick = onOpenSettings) {
                     Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_manage),
+                        painter = painterResource(id = R.drawable.ic_settings_gear),
                         contentDescription = "Настройки"
                     )
                 }
@@ -761,8 +789,10 @@ private fun HomeHeatmapSection(
     height: Dp,
     heatCells: List<VisibleTripHeatCell>,
     positions: List<LatLng>,
+    mapStyleUrl: String,
     isLoading: Boolean,
     hasTrips: Boolean,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit,
     onOpenMap: () -> Unit
 ) {
     Box(
@@ -774,7 +804,9 @@ private fun HomeHeatmapSection(
     ) {
         HomeHeatmapPreview(
             heatCells = heatCells,
-            positions = positions
+            positions = positions,
+            mapStyleUrl = mapStyleUrl,
+            onViewportChanged = onViewportChanged
         )
         Box(
             modifier = Modifier
@@ -796,13 +828,13 @@ private fun HomeHeatmapSection(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "Ваша география",
+                text = "География галереи",
                 style = MaterialTheme.typography.headlineSmall,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Поездки и посещенные места",
+                text = "Поездки и часто посещаемые места",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.88f)
             )
@@ -815,7 +847,7 @@ private fun HomeHeatmapSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Button(onClick = onOpenMap) {
-                Text("Открыть карту")
+                Text("Посмотреть на карте")
             }
             if (isLoading) {
                 Surface(
@@ -850,12 +882,13 @@ private fun HomeHeatmapSection(
 private fun FeaturedTripsSection(
     trips: List<TripMapMarker>,
     photosById: Map<Long, DevicePhoto>,
+    tripPhotoIdsByTripId: Map<Long, List<Long>>,
     onOpenAllTrips: () -> Unit,
     onOpenTrip: (Long) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader(
-            title = "Ваши поездки",
+            title = "Поездки",
             action = "Все поездки",
             onAction = onOpenAllTrips
         )
@@ -870,9 +903,16 @@ private fun FeaturedTripsSection(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(trips, key = { trip -> trip.tripId }) { trip ->
+                    val firstTripPhoto = firstPhotoForTrip(
+                        trip = trip,
+                        photosById = photosById,
+                        tripPhotoIdsByTripId = tripPhotoIdsByTripId
+                    )
+                    val coverPhoto = trip.coverPhotoId?.let { photoId -> photosById[photoId] } ?: firstTripPhoto
                     TripCard(
                         trip = trip,
-                        coverPhoto = trip.coverPhotoId?.let { photoId -> photosById[photoId] },
+                        coverPhoto = coverPhoto,
+                        shareBackgroundPhoto = firstTripPhoto ?: coverPhoto,
                         modifier = Modifier
                             .fillParentMaxWidth(HomeCarouselCardWidthFraction)
                             .height(172.dp)
@@ -920,6 +960,20 @@ private fun PopularPlacesSection(
             }
         }
     }
+}
+
+private fun firstPhotoForTrip(
+    trip: TripMapMarker,
+    photosById: Map<Long, DevicePhoto>,
+    tripPhotoIdsByTripId: Map<Long, List<Long>>
+): DevicePhoto? {
+    return tripPhotoIdsByTripId[trip.tripId]
+        .orEmpty()
+        .mapNotNull { photoId -> photosById[photoId] }
+        .minWithOrNull(
+            compareBy<DevicePhoto> { photo -> photo.photoDateMillis() ?: Long.MAX_VALUE }
+                .thenBy { photo -> photo.mediaId }
+        )
 }
 
 @Composable
@@ -1025,6 +1079,7 @@ private fun SectionHeader(
 private fun TripCard(
     trip: TripMapMarker,
     coverPhoto: DevicePhoto?,
+    shareBackgroundPhoto: DevicePhoto?,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1051,7 +1106,7 @@ private fun TripCard(
                     .align(Alignment.TopEnd)
                     .padding(10.dp)
                     .size(38.dp)
-                    .clickable { context.shareTripAnalyticsImage(trip) },
+                    .clickable { context.shareTripAnalyticsImage(trip, shareBackgroundPhoto) },
                 shape = CircleShape,
                 color = Color.Black.copy(alpha = 0.48f),
                 contentColor = Color.White
@@ -1257,65 +1312,184 @@ private fun HomeInlineEmptyState(
 @Composable
 private fun HomeHeatmapPreview(
     heatCells: List<VisibleTripHeatCell>,
-    positions: List<LatLng>
+    positions: List<LatLng>,
+    mapStyleUrl: String,
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
-    val points = remember(heatCells, positions) {
-        if (heatCells.isNotEmpty()) {
-            heatCells
-                .asSequence()
-                .sortedByDescending { cell -> cell.normalizedIntensity }
-                .take(MaxHomePreviewHeatPoints)
-                .map { cell ->
-                    HomePreviewPoint(
-                        latitude = cell.centerLatitude,
-                        longitude = cell.centerLongitude,
-                        weight = cell.normalizedIntensity.toFloat().coerceIn(0.12f, 1f)
-                    )
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val layerController = remember { PhotoMapLayerController() }
+    val latestHeatCells = rememberUpdatedState(heatCells)
+    val latestPositions = rememberUpdatedState(positions)
+    val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var isStyleReady by remember { mutableStateOf(false) }
+    var hasFitCamera by remember(positions) { mutableStateOf(false) }
+    val mapView = remember(mapStyleUrl) {
+        MapLibre.getInstance(context.applicationContext)
+        MapView(context).apply {
+            onCreate(Bundle())
+            getMapAsync { mapLibreMap ->
+                map = mapLibreMap
+                mapLibreMap.configureHomeHeatmapPreview()
+                mapLibreMap.addOnCameraIdleListener {
+                    mapLibreMap.dispatchHomeHeatmapViewportChanged(latestOnViewportChanged.value)
                 }
-                .toList()
-        } else {
-            positions
-                .asSequence()
-                .take(MaxHomePreviewHeatPoints)
-                .map { position ->
-                    HomePreviewPoint(
-                        latitude = position.latitude,
-                        longitude = position.longitude,
-                        weight = 0.38f
+                mapLibreMap.setStyle(mapStyleUrl) { style ->
+                    style.removeHomeMapPoliticalLayers()
+                    layerController.reset()
+                    layerController.updateTripHeatmap(
+                        style = style,
+                        featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(latestHeatCells.value)
                     )
+                    isStyleReady = true
+                    post {
+                        mapLibreMap.fitHomeHeatmapPreview(latestPositions.value)
+                        mapLibreMap.dispatchHomeHeatmapViewportChanged(latestOnViewportChanged.value)
+                    }
                 }
-                .toList()
+            }
         }
     }
-    Canvas(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF8FA69B))
-    ) {
-        drawRect(Color(0xFF7D948C))
-        drawCircle(
-            color = Color(0xFFB5C9BA).copy(alpha = 0.32f),
-            radius = maxOf(size.width, size.height) * 0.42f,
-            center = Offset(size.width * 0.62f, size.height * 0.34f)
+
+    DisposableEffect(lifecycleOwner, mapView) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> mapView.onStart()
+                Lifecycle.Event.ON_RESUME -> {
+                    mapView.onResume()
+                    mapView.post {
+                        map?.dispatchHomeHeatmapViewportChanged(latestOnViewportChanged.value)
+                    }
+                }
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                Lifecycle.Event.ON_STOP -> mapView.onStop()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapView.onDestroy()
+        }
+    }
+
+    LaunchedEffect(map, isStyleReady, heatCells) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady) {
+            return@LaunchedEffect
+        }
+        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        layerController.updateTripHeatmap(
+            style = style,
+            featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(heatCells)
         )
-        drawCircle(
-            color = Color(0xFF5D7FA5).copy(alpha = 0.28f),
-            radius = maxOf(size.width, size.height) * 0.24f,
-            center = Offset(size.width * 0.18f, size.height * 0.18f)
-        )
-        points.forEach { point ->
-            val center = point.toPreviewOffset(width = size.width, height = size.height)
-            drawCircle(
-                color = Color(0xFFFF5C7A).copy(alpha = 0.18f + point.weight * 0.34f),
-                radius = 18f + point.weight * 54f,
-                center = center
-            )
-            drawCircle(
-                color = Color(0xFFFFD166).copy(alpha = 0.12f + point.weight * 0.24f),
-                radius = 7f + point.weight * 18f,
-                center = center
+    }
+
+    LaunchedEffect(map, isStyleReady, positions) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady || hasFitCamera) {
+            return@LaunchedEffect
+        }
+        mapView.post {
+            mapLibreMap.fitHomeHeatmapPreview(positions)
+            hasFitCamera = true
+            mapLibreMap.dispatchHomeHeatmapViewportChanged(latestOnViewportChanged.value)
+            mapView.postDelayed(
+                {
+                    mapLibreMap.dispatchHomeHeatmapViewportChanged(latestOnViewportChanged.value)
+                },
+                HomeHeatmapViewportRefreshDelayMs
             )
         }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF7D948C))
+    ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { mapView }
+        )
+    }
+}
+
+private fun MapLibreMap.configureHomeHeatmapPreview() {
+    uiSettings.setAllGesturesEnabled(false)
+    uiSettings.setCompassEnabled(false)
+    uiSettings.setLogoEnabled(false)
+    uiSettings.setAttributionEnabled(false)
+}
+
+private fun Style.removeHomeMapPoliticalLayers() {
+    layers
+        .map { layer -> layer.id }
+        .filter { layerId -> layerId.isHomeMapPoliticalLayerId() }
+        .forEach { layerId -> removeLayer(layerId) }
+}
+
+private fun String.isHomeMapPoliticalLayerId(): Boolean {
+    val normalized = lowercase(Locale.US)
+    val isBoundaryLayer = normalized in HomeExactPoliticalLayerIds ||
+        HomePoliticalBoundaryTokens.any { token -> normalized.contains(token) }
+    val isCountryLabelLayer = HomeCountryLabelTokens.any { token -> normalized.contains(token) } &&
+        HomeLabelLayerTokens.any { token -> normalized.contains(token) }
+    return isBoundaryLayer || isCountryLabelLayer
+}
+
+private fun MapLibreMap.fitHomeHeatmapPreview(positions: List<LatLng>) {
+    runCatching {
+        when (positions.size) {
+            0 -> moveCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    LatLng(HomeHeatmapFallbackLatitude, HomeHeatmapFallbackLongitude),
+                    HomeHeatmapFallbackZoom
+                )
+            )
+            1 -> moveCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    positions.first(),
+                    HomeHeatmapSinglePositionZoom
+                )
+            )
+            else -> {
+                val bounds = LatLngBounds.Builder()
+                positions.forEach { position -> bounds.include(position) }
+                moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), HomeHeatmapBoundsPaddingPx))
+            }
+        }
+    }.onFailure { error ->
+        Log.w(HomeMapLogTag, "Failed to fit home heatmap preview", error)
+    }
+}
+
+private fun MapLibreMap.dispatchHomeHeatmapViewportChanged(
+    onViewportChanged: (PhotoMapBounds, Double) -> Unit
+) {
+    runCatching {
+        val visibleRegion = projection.visibleRegion
+        val points = listOfNotNull(
+            visibleRegion.nearLeft,
+            visibleRegion.nearRight,
+            visibleRegion.farLeft,
+            visibleRegion.farRight
+        )
+        if (points.isEmpty()) {
+            return@runCatching
+        }
+        onViewportChanged(
+            PhotoMapBounds(
+                south = points.minOf { point -> point.latitude },
+                west = points.minOf { point -> point.longitude },
+                north = points.maxOf { point -> point.latitude },
+                east = points.maxOf { point -> point.longitude }
+            ),
+            cameraPosition.zoom
+        )
+    }.onFailure { error ->
+        Log.w(HomeMapLogTag, "Failed to dispatch home heatmap viewport", error)
     }
 }
 
@@ -1516,9 +1690,12 @@ private fun formatTripCoordinates(latitude: Double, longitude: Double): String {
     return String.format(Locale.US, "%.3f, %.3f", latitude, longitude)
 }
 
-private fun Context.shareTripAnalyticsImage(trip: TripMapMarker) {
+private fun Context.shareTripAnalyticsImage(
+    trip: TripMapMarker,
+    backgroundPhoto: DevicePhoto?
+) {
     runCatching {
-        val bitmap = createTripAnalyticsShareBitmap(trip)
+        val bitmap = createTripAnalyticsShareBitmap(trip, backgroundPhoto)
         val directory = File(cacheDir, "trip-share").apply { mkdirs() }
         val file = File(directory, "trip-${trip.tripId}.png")
         FileOutputStream(file).use { output ->
@@ -1540,7 +1717,10 @@ private fun Context.shareTripAnalyticsImage(trip: TripMapMarker) {
     }
 }
 
-private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
+private fun Context.createTripAnalyticsShareBitmap(
+    trip: TripMapMarker,
+    backgroundPhoto: DevicePhoto?
+): Bitmap {
     val width = 1080
     val height = 1350
     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -1562,13 +1742,40 @@ private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
     }
     canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
 
-    val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x552DD4BF
-        style = Paint.Style.FILL
+    backgroundPhoto
+        ?.let { photo ->
+            loadTripShareBackgroundBitmap(
+                photo = photo,
+                targetWidthPx = width,
+                targetHeightPx = height
+            )
+        }
+        ?.let { image ->
+            val target = RectF(0f, 0f, width.toFloat(), height.toFloat())
+            canvas.drawBitmap(
+                image,
+                image.centerCropSourceRect(target),
+                target,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+            )
+        }
+
+    val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            0f,
+            0f,
+            0f,
+            height.toFloat(),
+            intArrayOf(
+                0xD608101B.toInt(),
+                0xAA101827.toInt(),
+                0xE308101B.toInt()
+            ),
+            floatArrayOf(0f, 0.42f, 1f),
+            Shader.TileMode.CLAMP
+        )
     }
-    canvas.drawCircle(930f, 150f, 260f, accentPaint)
-    accentPaint.color = 0x44FF5C7A
-    canvas.drawCircle(140f, 1210f, 300f, accentPaint)
+    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), overlayPaint)
 
     val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt()
@@ -1597,7 +1804,6 @@ private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
     canvas.drawText(title.fitToWidth(titlePaint, 920f), 80f, 135f, titlePaint)
     canvas.drawText(formatTripDateRange(trip.startDay, trip.endDay), 80f, 190f, subtitlePaint)
 
-    val confidencePercent = (trip.confidence * 100.0).coerceIn(0.0, 100.0).toInt()
     val radiusText = trip.radiusKm?.let { radius ->
         String.format(Locale("ru"), "%.1f км", radius)
     } ?: "не рассчитан"
@@ -1607,12 +1813,10 @@ private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
     drawTripShareMetric(canvas, "Фотографии", "${trip.photoCount}", 80f, metricTop, cardWidth, cardHeight, labelPaint, valuePaint)
     drawTripShareMetric(canvas, "Активные дни", "${trip.activeDayCount}", 580f, metricTop, cardWidth, cardHeight, labelPaint, valuePaint)
     drawTripShareMetric(canvas, "Радиус", radiusText, 80f, metricTop + 190f, cardWidth, cardHeight, labelPaint, valuePaint)
-    drawTripShareMetric(canvas, "Уверенность", "$confidencePercent%", 580f, metricTop + 190f, cardWidth, cardHeight, labelPaint, valuePaint)
+    drawTripShareMetric(canvas, "Тип", formatTripTypeLabel(trip.type), 580f, metricTop + 190f, cardWidth, cardHeight, labelPaint, valuePaint)
 
-    canvas.drawText("Координаты центра", 80f, 790f, labelPaint)
-    canvas.drawText(formatTripCoordinates(trip.latitude, trip.longitude), 80f, 845f, valuePaint)
-    canvas.drawText("Тип поездки", 80f, 930f, labelPaint)
-    canvas.drawText(formatTripTypeLabel(trip.type), 80f, 985f, valuePaint)
+    canvas.drawText("Координаты центра", 80f, 810f, labelPaint)
+    canvas.drawText(formatTripCoordinates(trip.latitude, trip.longitude), 80f, 865f, valuePaint)
 
     val footerBox = RectF(80f, 1100f, 1000f, 1255f)
     val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -1620,7 +1824,7 @@ private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
         style = Paint.Style.FILL
     }
     canvas.drawRoundRect(footerBox, 34f, 34f, footerPaint)
-    canvas.drawText("Photo Map", 120f, 1162f, valuePaint)
+    canvas.drawText("Traverse", 120f, 1162f, valuePaint)
     canvas.drawText("Аналитика поездки, созданная локально на устройстве", 120f, 1215f, smallPaint)
 
     return bitmap
@@ -1645,6 +1849,50 @@ private fun drawTripShareMetric(
     canvas.drawRoundRect(rect, 30f, 30f, cardPaint)
     canvas.drawText(label, left + 34f, top + 52f, labelPaint)
     canvas.drawText(value.fitToWidth(valuePaint, width - 68f), left + 34f, top + 112f, valuePaint)
+}
+
+private fun Context.loadTripShareBackgroundBitmap(
+    photo: DevicePhoto,
+    targetWidthPx: Int,
+    targetHeightPx: Int
+): Bitmap? {
+    val uri = Uri.parse(photo.uri)
+    return runCatching {
+        contentResolver.loadThumbnail(uri, Size(targetWidthPx, targetHeightPx), null)
+    }.onFailure { error ->
+        Log.w(HomeMapLogTag, "Trip share loadThumbnail failed: photoId=${photo.mediaId}", error)
+    }.getOrNull() ?: runCatching {
+        val source = ImageDecoder.createSource(contentResolver, uri)
+        ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            val width = info.size.width.coerceAtLeast(1)
+            val height = info.size.height.coerceAtLeast(1)
+            val targetScale = maxOf(
+                targetWidthPx.toFloat() / width.toFloat(),
+                targetHeightPx.toFloat() / height.toFloat()
+            )
+            decoder.setTargetSize(
+                (width * targetScale).toInt().coerceAtLeast(1),
+                (height * targetScale).toInt().coerceAtLeast(1)
+            )
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+        }
+    }.onFailure { error ->
+        Log.w(HomeMapLogTag, "Trip share ImageDecoder failed: photoId=${photo.mediaId}", error)
+    }.getOrNull()
+}
+
+private fun Bitmap.centerCropSourceRect(targetRect: RectF): Rect {
+    val targetAspect = targetRect.width() / targetRect.height()
+    val sourceAspect = width.toFloat() / height.toFloat()
+    return if (sourceAspect > targetAspect) {
+        val cropWidth = (height * targetAspect).toInt().coerceAtLeast(1)
+        val left = ((width - cropWidth) / 2).coerceAtLeast(0)
+        Rect(left, 0, (left + cropWidth).coerceAtMost(width), height)
+    } else {
+        val cropHeight = (width / targetAspect).toInt().coerceAtLeast(1)
+        val top = ((height - cropHeight) / 2).coerceAtLeast(0)
+        Rect(0, top, width, (top + cropHeight).coerceAtMost(height))
+    }
 }
 
 private fun String.fitToWidth(paint: Paint, maxWidth: Float): String {
@@ -1918,8 +2166,13 @@ private const val MaxHomePlaceModels = 200
 private const val MaxHomePlacePreviewPhotos = 80
 private const val MaxHomeMapPositions = 800
 private const val MaxOnThisDayMapPoints = 300
-private const val MaxHomePreviewHeatPoints = 180
 private const val MaxHomePreviewMemoryPoints = 80
+private const val HomeHeatmapBoundsPaddingPx = 90
+private const val HomeHeatmapViewportRefreshDelayMs = 320L
+private const val HomeHeatmapSinglePositionZoom = 5.5
+private const val HomeHeatmapFallbackLatitude = 20.0
+private const val HomeHeatmapFallbackLongitude = 0.0
+private const val HomeHeatmapFallbackZoom = 0.8
 private const val HomeCarouselCardWidthFraction = 0.54f
 private const val TripLikeVisitGapDays = 3L
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
@@ -1930,4 +2183,25 @@ private const val MaxTripPlaceFallbackRadiusKm = 80.0
 private const val TripPlaceFallbackPaddingKm = 10.0
 private const val TripPlaceNameIdPrefix = "trip-place-name-"
 private const val TripPlaceTripIdPrefix = "trip-place-trip-"
+private const val HomeMapLogTag = "PhotoMapHome"
 private val WhitespaceRegex = Regex("\\s+")
+private val HomeExactPoliticalLayerIds = setOf(
+    "countries-boundary",
+    "geolines",
+    "geolines-label"
+)
+private val HomePoliticalBoundaryTokens = listOf(
+    "boundary",
+    "border",
+    "admin-",
+    "admin_"
+)
+private val HomeCountryLabelTokens = listOf(
+    "country",
+    "countries"
+)
+private val HomeLabelLayerTokens = listOf(
+    "label",
+    "name",
+    "place"
+)

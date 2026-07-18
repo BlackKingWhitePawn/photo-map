@@ -1,8 +1,8 @@
-# Photo Map
+# Traverse
 
 Нативное Android-приложение для локальной галереи фотографий с будущим отображением снимков на карте.
 
-Проект разрабатывается по этапам. Текущая ветка `release-0-12-0` добавляет главную страницу с теплокартой, поездками, популярными местами и переиспользуемой мини-галереей.
+Проект разрабатывается по этапам. Текущая ветка `release-1-0-0` готовит первый стабильный релиз с доработанной главной теплокартой, экспортом поездок, настройками и нижними контролами карты.
 
 ## Текущее состояние
 
@@ -94,7 +94,7 @@
 
 The app starts from a home screen that summarizes the local photo geography without rescanning media or recalculating trips on the UI thread. It shows a compact trip heatmap preview, featured trip cards, popular places derived from indexed geotagged photos, and an "On this day in the past" section. Shared thumbnail rows use the reusable `MiniPhotoGallery` / `MiniPhotoThumbnail` components.
 
-The full photo map, trip map, settings, all-places screen, and place detail screen remain available through Navigation Compose routes.
+The full Traverse map, trip map, settings, all-places screen, and place detail screen remain available through Navigation Compose routes.
 
 ## MediaStore
 

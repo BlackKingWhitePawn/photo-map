@@ -46,7 +46,7 @@ object AppDiagnostics {
         val file = File(directory, "photo-map-${fileTimestampFormat.format(Date())}.log")
         file.writeText(
             buildString {
-                appendLine("Photo Map diagnostics")
+                appendLine("Traverse diagnostics")
                 appendLine("Generated: ${timestampFormat.format(Date())}")
                 appendLine()
                 appendLine(header)

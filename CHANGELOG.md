@@ -8,6 +8,41 @@
 
 Изменений пока нет.
 
+## [0.12.0] - 2026-07-18
+
+### Added
+
+* Added a lazy heatmap mini-gallery timeline that pages nearby photos while keeping the selected location marker in sync.
+* Added a trip-card share action that generates a local PNG with trip analytics and shares it through FileProvider.
+* Added direct "On this day" map opening with a one-day date range and the range picker expanded.
+
+### Changed
+
+* Reworked the photo heatmap into presence and density layers so every geotagged photo contributes at every zoom.
+* Selected heatmap photos now use a standalone location icon marker without the extra halo circle.
+* Heatmap mini-gallery swipes can fling across multiple photos and marker/camera movement follows the active photo.
+* Trip photo scrubbers reserve layout space and animate the gallery scroll instead of jumping over cards.
+* Removed the trips and density FABs from the map's bottom controls.
+* Android app metadata is now `versionName=0.12.0`, `versionCode=18`.
+
+## [0.11.0] - 2026-07-18
+
+### Added
+
+* Added a new `home` start screen with a vertically scrolling personal geography dashboard.
+* Added a compact trip heatmap preview at the top of the home screen using the existing MapLibre heatmap layer and ready heat cells.
+* Added a featured trips carousel with cover photos, date ranges, and trip photo counts.
+* Added popular places cards derived from already indexed local photos with coordinates.
+* Added an all-places screen and a place detail screen with mini-galleries grouped by day.
+* Added an "On this day in the past" home block with a dedicated map preview and photo thumbnails.
+* Added reusable `MiniPhotoGallery` and `MiniPhotoThumbnail` components for shared mini-gallery UI.
+
+### Changed
+
+* App navigation now starts at the home screen; the full photo map remains available as a separate route.
+* Permission success navigation now returns to the home screen instead of opening the full map directly.
+* Android app metadata is now `versionName=0.11.0`, `versionCode=17`.
+
 ## [0.10.0] - 2026-07-18
 
 ### Added

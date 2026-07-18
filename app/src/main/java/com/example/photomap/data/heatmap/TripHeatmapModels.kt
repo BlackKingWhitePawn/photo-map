@@ -60,11 +60,10 @@ data class BuiltTripHeatmap(
 
 fun heatResolutionForZoom(zoom: Double): Int {
     return when {
-        zoom < 5.0 -> 4
-        zoom < 8.0 -> 5
-        zoom < 11.0 -> 6
-        zoom < 14.0 -> 7
-        zoom < 17.0 -> 8
-        else -> 9
+        zoom < 6.0 -> 4
+        zoom < 9.0 -> 5
+        zoom < 12.5 -> 6
+        zoom < 15.5 -> 7
+        else -> 8
     }
 }

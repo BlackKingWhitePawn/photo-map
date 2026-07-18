@@ -2,7 +2,7 @@
 
 Нативное Android-приложение для локальной галереи фотографий с будущим отображением снимков на карте.
 
-Проект разрабатывается по этапам. Текущая ветка `feature-14-trip-segmentation` добавляет локальную кластеризацию поездок и отдельную темную карту поездок.
+Проект разрабатывается по этапам. Текущая ветка `release-0-12-0` добавляет главную страницу с теплокартой, поездками, популярными местами и переиспользуемой мини-галереей.
 
 ## Текущее состояние
 
@@ -89,6 +89,12 @@
 * `ACCESS_MEDIA_LOCATION` для будущего чтения исходных геоданных из медиа.
 
 Если доступ к фотографиям не выдан, приложение не должно падать. После отказа доступ можно запросить повторно или открыть системные настройки приложения.
+
+## Home Screen
+
+The app starts from a home screen that summarizes the local photo geography without rescanning media or recalculating trips on the UI thread. It shows a compact trip heatmap preview, featured trip cards, popular places derived from indexed geotagged photos, and an "On this day in the past" section. Shared thumbnail rows use the reusable `MiniPhotoGallery` / `MiniPhotoThumbnail` components.
+
+The full photo map, trip map, settings, all-places screen, and place detail screen remain available through Navigation Compose routes.
 
 ## MediaStore
 

@@ -5,6 +5,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -19,6 +20,12 @@ import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.matchesPhotoDateFilter
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.ui.home.AllPlacesScreen
+import com.example.photomap.ui.home.HomePlaceCardUiModel
+import com.example.photomap.ui.home.HomeScreen
+import com.example.photomap.ui.home.PlaceDetailsScreen
+import com.example.photomap.ui.home.buildHomePlaceModels
+import com.example.photomap.ui.home.photosForHomePlace
 import com.example.photomap.ui.map.PhotoMapScreen
 import com.example.photomap.ui.permissions.PhotoAccessRoute
 import com.example.photomap.ui.permissions.PhotoAccessViewModel
@@ -27,6 +34,8 @@ import com.example.photomap.ui.trips.TripDetailsScreen
 import com.example.photomap.ui.trips.TripMapCameraState
 import com.example.photomap.ui.trips.TripMapScreen
 import com.example.photomap.ui.trips.toFocusedTripMapCameraState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun PhotoMapApp(
@@ -38,6 +47,9 @@ fun PhotoMapApp(
     val currentRoute = backStackEntry?.destination?.route
     var focusedTripId by remember { mutableStateOf<Long?>(null) }
     var mapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
+    var mapFocusPhotoIds by remember { mutableStateOf<Set<Long>?>(null) }
+    var mapFocusRequestKey by remember { mutableStateOf(0) }
+    var mapDateFilterPanelRequestKey by remember { mutableStateOf(0) }
     var tripMapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
 
     LaunchedEffect(state.permissionStatus.canReadImages, currentRoute) {
@@ -47,7 +59,7 @@ fun PhotoMapApp(
         ) {
             navController.navigate(Routes.Photos) {
                 launchSingleTop = true
-                popUpTo(Routes.Map) {
+                popUpTo(Routes.Home) {
                     inclusive = false
                 }
             }
@@ -62,7 +74,7 @@ fun PhotoMapApp(
 
     fun navigateBackOrMap() {
         if (!navController.popBackStack()) {
-            navController.navigate(Routes.Map) {
+            navController.navigate(Routes.Home) {
                 launchSingleTop = true
             }
         }
@@ -82,17 +94,81 @@ fun PhotoMapApp(
         navigateSingleTop(Routes.Trips)
     }
 
-    val mapPhotos = state.photos.filter { photo -> photo.matchesPhotoDateFilter(state.dateFilter) }
+    fun openPlaceOnMap(placePhotos: List<DevicePhoto>) {
+        val photoIds = placePhotos
+            .filter { photo -> photo.hasLocation }
+            .map { photo -> photo.mediaId }
+            .toSet()
+        if (photoIds.isNotEmpty()) {
+            mapFocusPhotoIds = photoIds
+            mapFocusRequestKey += 1
+        } else {
+            mapFocusPhotoIds = null
+        }
+        if (state.dateFilter.isActive) {
+            viewModel.resetMapDateFilter()
+        }
+        navigateSingleTop(Routes.Map)
+    }
+
+    fun openMapForDateFilterDay(day: Long) {
+        mapFocusPhotoIds = null
+        viewModel.setMapDateFilter(day, day)
+        mapDateFilterPanelRequestKey += 1
+        navigateSingleTop(Routes.Map)
+    }
+
+    fun openTripDetails(tripId: Long) {
+        focusTripOnTripMap(tripId)
+        navController.navigate(Routes.tripDetails(tripId))
+    }
+
+    val photos = state.photos
+    val mapPhotos = remember(photos, state.dateFilter) {
+        photos.filter { photo -> photo.matchesPhotoDateFilter(state.dateFilter) }
+    }
+    val homePlaces by produceState(
+        initialValue = emptyList<HomePlaceCardUiModel>(),
+        photos,
+        state.tripMarkers,
+        state.tripPhotoIdsByTripId
+    ) {
+        value = withContext(Dispatchers.Default) {
+            buildHomePlaceModels(
+                photos = photos,
+                trips = state.tripMarkers,
+                tripPhotoIdsByTripId = state.tripPhotoIdsByTripId
+            )
+        }
+    }
 
     NavHost(
         navController = navController,
-        startDestination = Routes.Map
+        startDestination = Routes.Home
     ) {
         composable(Routes.Photos) {
             PhotoAccessRoute(
                 viewModel = viewModel,
-                onOpenMap = { navigateSingleTop(Routes.Map) },
+                onOpenMap = { navigateSingleTop(Routes.Home) },
                 onOpenAppSettings = { navigateSingleTop(Routes.Settings) }
+            )
+        }
+
+        composable(Routes.Home) {
+            HomeScreen(
+                state = state,
+                places = homePlaces,
+                onOpenMap = {
+                    mapFocusPhotoIds = null
+                    navigateSingleTop(Routes.Map)
+                },
+                onOpenMapForDay = { day -> openMapForDateFilterDay(day) },
+                onOpenAllTrips = { openTripsFromMap() },
+                onOpenTrip = { tripId -> openTripDetails(tripId) },
+                onOpenAllPlaces = { navigateSingleTop(Routes.Places) },
+                onOpenPlace = { placeId -> navController.navigate(Routes.placeDetails(placeId)) },
+                onOpenSettings = { navigateSingleTop(Routes.Settings) },
+                onRefresh = { viewModel.scanPhotos() }
             )
         }
 
@@ -113,12 +189,41 @@ fun PhotoMapApp(
                 onResume = viewModel::resumeCurrentAction,
                 onCancel = viewModel::cancelCurrentAction,
                 onOpenSettings = { navigateSingleTop(Routes.Settings) },
-                onOpenTrips = { openTripsFromMap() },
-                onClusterDensityChanged = viewModel::setClusterDensityCoefficientPercent,
                 onDateFilterChanged = viewModel::setMapDateFilter,
                 onDateFilterReset = viewModel::resetMapDateFilter,
+                openDateFilterRequestKey = mapDateFilterPanelRequestKey,
+                focusPhotoIds = mapFocusPhotoIds,
+                focusRequestKey = mapFocusRequestKey,
                 onCameraStateChanged = { cameraState -> mapCameraState = cameraState },
                 onViewportChanged = viewModel::onMapViewportChanged
+            )
+        }
+
+        composable(Routes.Places) {
+            AllPlacesScreen(
+                places = homePlaces,
+                onBack = { navigateBackOrMap() },
+                onOpenPlace = { placeId -> navController.navigate(Routes.placeDetails(placeId)) }
+            )
+        }
+
+        composable(
+            route = Routes.PlaceDetails,
+            arguments = listOf(navArgument(Routes.PlaceIdArgument) { type = NavType.StringType })
+        ) { entry ->
+            val placeId = entry.arguments?.getString(Routes.PlaceIdArgument).orEmpty()
+            val place = homePlaces.firstOrNull { homePlace -> homePlace.id == placeId }
+            val placePhotos = remember(photos, state.tripMarkers, state.tripPhotoIdsByTripId, placeId) {
+                photosForHomePlace(
+                    photos = photos,
+                    placeId = placeId,
+                    trips = state.tripMarkers,
+                    tripPhotoIdsByTripId = state.tripPhotoIdsByTripId
+                )
+            }
+            PlaceDetailsScreen(
+                place = place?.copy(photos = placePhotos),
+                onOpenMap = { openPlaceOnMap(placePhotos) }
             )
         }
 
@@ -165,10 +270,7 @@ fun PhotoMapApp(
                 onCameraStateChanged = { cameraState -> tripMapCameraState = cameraState },
                 onViewportChanged = viewModel::onTripHeatmapViewportChanged,
                 onFocusTrip = { tripId -> focusTripOnTripMap(tripId) },
-                onOpenTrip = { tripId ->
-                    focusTripOnTripMap(tripId)
-                    navController.navigate(Routes.tripDetails(tripId))
-                }
+                onOpenTrip = { tripId -> openTripDetails(tripId) }
             )
         }
 
@@ -194,17 +296,25 @@ fun PhotoMapApp(
 }
 
 private object Routes {
+    const val Home = "home"
     const val Photos = "photos"
     const val Map = "map"
     const val Settings = "settings"
     const val Trips = "trips"
+    const val Places = "places"
     const val TripIdArgument = "tripId"
     const val TripDetails = "trip/{$TripIdArgument}"
+    const val PlaceIdArgument = "placeId"
+    const val PlaceDetails = "place/{$PlaceIdArgument}"
 
-    val PermissionRequiredRoutes = setOf(Map, Trips, TripDetails)
+    val PermissionRequiredRoutes = setOf(Home, Map, Trips, TripDetails, Places, PlaceDetails)
 
     fun tripDetails(tripId: Long): String {
         return "trip/$tripId"
+    }
+
+    fun placeDetails(placeId: String): String {
+        return "place/$placeId"
     }
 }
 

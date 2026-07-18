@@ -1,5 +1,14 @@
 package com.example.photomap.ui.home
 
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -23,10 +32,12 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,33 +50,43 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
+import androidx.core.content.FileProvider
 import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.ui.components.MiniGalleryTimeScrubber
 import com.example.photomap.ui.components.MiniPhotoThumbnail
 import com.example.photomap.ui.components.PhotoDateGridDay
+import com.example.photomap.ui.components.openMiniGalleryPhoto
 import com.example.photomap.ui.components.photoDateGridGroups
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
 import kotlin.math.atan2
@@ -105,6 +126,7 @@ fun HomeScreen(
     state: PhotoAccessUiState,
     places: List<HomePlaceCardUiModel>,
     onOpenMap: () -> Unit,
+    onOpenMapForDay: (Long) -> Unit,
     onOpenAllTrips: () -> Unit,
     onOpenTrip: (Long) -> Unit,
     onOpenAllPlaces: () -> Unit,
@@ -178,7 +200,7 @@ fun HomeScreen(
                     OnThisDaySection(
                         height = heights.onThisDayHeight,
                         state = onThisDay,
-                        onOpenMap = onOpenMap
+                        onOpenMap = { onOpenMapForDay(onThisDay.targetDateFilterDay) }
                     )
                 }
             }
@@ -246,20 +268,54 @@ fun PlaceDetailsScreen(
                     modifier = Modifier.weight(1f)
                 )
             } else {
+                val context = LocalContext.current
                 val photoGroups = remember(place.photos) {
                     photoDateGridGroups(place.photos)
                 }
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    item {
-                        PlaceDetailsHeader(place = place)
+                val groupIndexByPhotoId = remember(photoGroups) {
+                    photoGroups.flatMapIndexed { index, group ->
+                        group.photos.map { photo -> photo.mediaId to index }
+                    }.toMap()
+                }
+                val galleryListState = rememberLazyListState()
+                val coroutineScope = rememberCoroutineScope()
+                var selectedPhotoId by remember(place.photos) {
+                    mutableStateOf(place.photos.firstOrNull()?.mediaId)
+                }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = galleryListState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            PlaceDetailsHeader(place = place)
+                        }
+                        items(photoGroups, key = { group -> group.day }) { group ->
+                            PhotoDateGridDay(
+                                group = group,
+                                selectedPhotoId = selectedPhotoId,
+                                onPhotoClick = { photo ->
+                                    selectedPhotoId = photo.mediaId
+                                    context.openMiniGalleryPhoto(photo)
+                                }
+                            )
+                        }
                     }
-                    items(photoGroups, key = { group -> group.day }) { group ->
-                        PhotoDateGridDay(group = group)
-                    }
+                    MiniGalleryTimeScrubber(
+                        photos = place.photos,
+                        selectedPhotoId = selectedPhotoId,
+                        onPhotoSelected = { photo ->
+                            selectedPhotoId = photo.mediaId
+                            groupIndexByPhotoId[photo.mediaId]?.let { groupIndex ->
+                                coroutineScope.launch {
+                                    galleryListState.scrollToItem(groupIndex + 1)
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -971,6 +1027,7 @@ private fun TripCard(
     coverPhoto: DevicePhoto?,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(18.dp)
@@ -989,6 +1046,24 @@ private fun TripCard(
                         )
                     )
             )
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(38.dp)
+                    .clickable { context.shareTripAnalyticsImage(trip) },
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.48f),
+                contentColor = Color.White
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_share),
+                        contentDescription = "Поделиться поездкой",
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -1441,6 +1516,156 @@ private fun formatTripCoordinates(latitude: Double, longitude: Double): String {
     return String.format(Locale.US, "%.3f, %.3f", latitude, longitude)
 }
 
+private fun Context.shareTripAnalyticsImage(trip: TripMapMarker) {
+    runCatching {
+        val bitmap = createTripAnalyticsShareBitmap(trip)
+        val directory = File(cacheDir, "trip-share").apply { mkdirs() }
+        val file = File(directory, "trip-${trip.tripId}.png")
+        FileOutputStream(file).use { output ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+        }
+        val uri = FileProvider.getUriForFile(
+            this,
+            "$packageName.fileprovider",
+            file
+        )
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/png"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(shareIntent, "Поделиться поездкой"))
+    }.onFailure {
+        Toast.makeText(this, "Не удалось подготовить изображение поездки", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun createTripAnalyticsShareBitmap(trip: TripMapMarker): Bitmap {
+    val width = 1080
+    val height = 1350
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = AndroidCanvas(bitmap)
+    val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            0f,
+            0f,
+            width.toFloat(),
+            height.toFloat(),
+            intArrayOf(
+                0xFF111827.toInt(),
+                0xFF172033.toInt(),
+                0xFF2A1F4F.toInt()
+            ),
+            floatArrayOf(0f, 0.56f, 1f),
+            Shader.TileMode.CLAMP
+        )
+    }
+    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
+
+    val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x552DD4BF
+        style = Paint.Style.FILL
+    }
+    canvas.drawCircle(930f, 150f, 260f, accentPaint)
+    accentPaint.color = 0x44FF5C7A
+    canvas.drawCircle(140f, 1210f, 300f, accentPaint)
+
+    val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt()
+        textSize = 64f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+    }
+    val subtitlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xDDE5ECFF.toInt()
+        textSize = 34f
+    }
+    val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xAFCBD5E1.toInt()
+        textSize = 29f
+    }
+    val valuePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt()
+        textSize = 42f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+    }
+    val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xCFE5ECFF.toInt()
+        textSize = 30f
+    }
+
+    val title = trip.placeName?.takeIf { value -> value.isNotBlank() } ?: "Поездка"
+    canvas.drawText(title.fitToWidth(titlePaint, 920f), 80f, 135f, titlePaint)
+    canvas.drawText(formatTripDateRange(trip.startDay, trip.endDay), 80f, 190f, subtitlePaint)
+
+    val confidencePercent = (trip.confidence * 100.0).coerceIn(0.0, 100.0).toInt()
+    val radiusText = trip.radiusKm?.let { radius ->
+        String.format(Locale("ru"), "%.1f км", radius)
+    } ?: "не рассчитан"
+    val metricTop = 285f
+    val cardWidth = 420f
+    val cardHeight = 154f
+    drawTripShareMetric(canvas, "Фотографии", "${trip.photoCount}", 80f, metricTop, cardWidth, cardHeight, labelPaint, valuePaint)
+    drawTripShareMetric(canvas, "Активные дни", "${trip.activeDayCount}", 580f, metricTop, cardWidth, cardHeight, labelPaint, valuePaint)
+    drawTripShareMetric(canvas, "Радиус", radiusText, 80f, metricTop + 190f, cardWidth, cardHeight, labelPaint, valuePaint)
+    drawTripShareMetric(canvas, "Уверенность", "$confidencePercent%", 580f, metricTop + 190f, cardWidth, cardHeight, labelPaint, valuePaint)
+
+    canvas.drawText("Координаты центра", 80f, 790f, labelPaint)
+    canvas.drawText(formatTripCoordinates(trip.latitude, trip.longitude), 80f, 845f, valuePaint)
+    canvas.drawText("Тип поездки", 80f, 930f, labelPaint)
+    canvas.drawText(formatTripTypeLabel(trip.type), 80f, 985f, valuePaint)
+
+    val footerBox = RectF(80f, 1100f, 1000f, 1255f)
+    val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x22FFFFFF
+        style = Paint.Style.FILL
+    }
+    canvas.drawRoundRect(footerBox, 34f, 34f, footerPaint)
+    canvas.drawText("Photo Map", 120f, 1162f, valuePaint)
+    canvas.drawText("Аналитика поездки, созданная локально на устройстве", 120f, 1215f, smallPaint)
+
+    return bitmap
+}
+
+private fun drawTripShareMetric(
+    canvas: AndroidCanvas,
+    label: String,
+    value: String,
+    left: Float,
+    top: Float,
+    width: Float,
+    height: Float,
+    labelPaint: Paint,
+    valuePaint: Paint
+) {
+    val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x24FFFFFF
+        style = Paint.Style.FILL
+    }
+    val rect = RectF(left, top, left + width, top + height)
+    canvas.drawRoundRect(rect, 30f, 30f, cardPaint)
+    canvas.drawText(label, left + 34f, top + 52f, labelPaint)
+    canvas.drawText(value.fitToWidth(valuePaint, width - 68f), left + 34f, top + 112f, valuePaint)
+}
+
+private fun String.fitToWidth(paint: Paint, maxWidth: Float): String {
+    if (paint.measureText(this) <= maxWidth) {
+        return this
+    }
+    var result = this
+    while (result.length > 1 && paint.measureText("$result...") > maxWidth) {
+        result = result.dropLast(1)
+    }
+    return "$result..."
+}
+
+private fun formatTripTypeLabel(type: com.example.photomap.domain.trip.TripType): String {
+    return when (type) {
+        com.example.photomap.domain.trip.TripType.SINGLE_DESTINATION_TRIP -> "Одна локация"
+        com.example.photomap.domain.trip.TripType.MULTI_DESTINATION_TRIP -> "Несколько локаций"
+        com.example.photomap.domain.trip.TripType.UNKNOWN -> "Не определён"
+    }
+}
+
 private fun haversineKm(
     firstLatitude: Double,
     firstLongitude: Double,
@@ -1468,6 +1693,7 @@ private fun emptyOnThisDayUiState(): OnThisDayUiState {
     return OnThisDayUiState(
         day = now.get(Calendar.DAY_OF_MONTH),
         month = now.get(Calendar.MONTH) + 1,
+        targetDateFilterDay = previousYearDateFilterDay(now),
         years = emptyList(),
         photoCount = 0,
         points = emptyList(),
@@ -1512,10 +1738,17 @@ private fun buildOnThisDayUiState(photos: List<DevicePhoto>): OnThisDayUiState {
             )
         }
         .toList()
+    val targetDateFilterDay = matchingPhotos
+        .firstOrNull()
+        ?.first
+        ?.photoDateMillis()
+        ?.let(::homeDateFilterDayFromMillis)
+        ?: previousYearDateFilterDay(now)
     val subtitle = SimpleDateFormat("d MMMM", Locale("ru")).format(now.time) + " в разные годы"
     return OnThisDayUiState(
         day = day,
         month = month + 1,
+        targetDateFilterDay = targetDateFilterDay,
         years = years,
         photoCount = matchingPhotos.size,
         points = points,
@@ -1564,9 +1797,21 @@ private fun formatMillisDate(millis: Long): String {
     return SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(millis))
 }
 
+private fun homeDateFilterDayFromMillis(millis: Long): Long {
+    return Math.floorDiv(millis, MillisPerDay)
+}
+
+private fun previousYearDateFilterDay(now: Calendar): Long {
+    val previousYear = (now.clone() as Calendar).apply {
+        add(Calendar.YEAR, -1)
+    }
+    return homeDateFilterDayFromMillis(previousYear.timeInMillis)
+}
+
 private data class OnThisDayUiState(
     val day: Int,
     val month: Int,
+    val targetDateFilterDay: Long,
     val years: List<Int>,
     val photoCount: Int,
     val points: List<OnThisDayMapPoint>,

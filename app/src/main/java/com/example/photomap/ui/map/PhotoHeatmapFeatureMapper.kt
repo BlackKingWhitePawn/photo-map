@@ -5,11 +5,12 @@ import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.matchesPhotoDateFilter
 import kotlin.math.PI
+import kotlin.math.atan
 import kotlin.math.floor
 import kotlin.math.ln
-import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sinh
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import org.maplibre.geojson.Feature
@@ -28,6 +29,11 @@ data class PhotoHeatmapViewportRequest(
 
 data class PhotoHeatmapCell(
     val id: String,
+    val zoom: Int,
+    val tileX: Int,
+    val tileY: Int,
+    val cellX: Int,
+    val cellY: Int,
     val latitude: Double,
     val longitude: Double,
     val photoCount: Int,
@@ -62,11 +68,8 @@ object PhotoHeatmapFeatureMapper {
         }
 
         val queryBounds = request.bounds.expanded(PhotoHeatmapViewportPaddingFactor)
-        val cellSizePx = photoHeatmapCellSizePx(
-            zoom = request.zoom,
-            density = request.density
-        )
-        val worldSizePx = PhotoHeatmapTileSizePx * 2.0.pow(request.zoom)
+        val dataZoom = photoHeatmapDataZoom(request.zoom)
+        val worldSizePx = PhotoHeatmapTileSizePx * 2.0.pow(dataZoom)
         val cellsByKey = LinkedHashMap<PhotoHeatmapCellKey, MutablePhotoHeatmapCell>()
         var visiblePhotoCount = 0
 
@@ -87,18 +90,22 @@ object PhotoHeatmapFeatureMapper {
 
             val x = longitudeToMercatorX(point.longitude, worldSizePx)
             val y = latitudeToMercatorY(point.latitude, worldSizePx)
-            val key = PhotoHeatmapCellKey(
-                x = floor(x / cellSizePx).toInt(),
-                y = floor(y / cellSizePx).toInt()
+            val key = PhotoHeatmapCellKey.fromMercator(
+                zoom = dataZoom,
+                x = x,
+                y = y
             )
             cellsByKey.getOrPut(key) {
-                MutablePhotoHeatmapCell(id = "${key.x}:${key.y}")
+                MutablePhotoHeatmapCell(
+                    key = key,
+                    latitude = mercatorYToLatitude(key.centerY, worldSizePx),
+                    longitude = mercatorXToLongitude(key.centerX, worldSizePx)
+                )
             }.add(point)
         }
 
         val cells = HeatmapNormalizer.normalize(
-            cells = cellsByKey.values.map { cell -> cell.toCell() },
-            zoom = request.zoom
+            cells = cellsByKey.values.map { cell -> cell.toCell() }
         )
         return PhotoHeatmapRenderState(
             requestId = request.requestId,
@@ -113,8 +120,7 @@ object PhotoHeatmapFeatureMapper {
 
 object HeatmapNormalizer {
     fun normalize(
-        cells: List<PhotoHeatmapCell>,
-        zoom: Double
+        cells: List<PhotoHeatmapCell>
     ): List<PhotoHeatmapCell> {
         if (cells.isEmpty()) {
             return emptyList()
@@ -124,20 +130,11 @@ object HeatmapNormalizer {
             values = cells.map { cell -> cell.photoCount },
             percentile = PhotoHeatmapLocalReferencePercentile
         ).coerceAtLeast(PhotoHeatmapMinLocalReferenceCount)
-        val absoluteReference = photoHeatmapAbsoluteReferenceCount(zoom)
         return cells.map { cell ->
-            val localWeight = logarithmicWeight(
+            val finalWeight = logarithmicWeight(
                 count = cell.photoCount,
                 reference = localReference
-            )
-            val absoluteWeight = logarithmicWeight(
-                count = cell.photoCount,
-                reference = absoluteReference
-            )
-            val finalWeight = (
-                PhotoHeatmapLocalWeightRatio * localWeight +
-                    PhotoHeatmapAbsoluteWeightRatio * absoluteWeight
-                ).coerceIn(PhotoHeatmapMinWeight, 1.0)
+            ).coerceIn(PhotoHeatmapMinWeight, 1.0)
 
             cell.copy(weight = finalWeight)
         }
@@ -215,23 +212,62 @@ private data class PhotoHeatmapPoint(
 )
 
 private data class PhotoHeatmapCellKey(
-    val x: Int,
-    val y: Int
-)
+    val zoom: Int,
+    val tileX: Int,
+    val tileY: Int,
+    val cellX: Int,
+    val cellY: Int
+) {
+    val id: String
+        get() = "$zoom:$tileX:$tileY:$cellX:$cellY"
+
+    val centerX: Double
+        get() = tileX * PhotoHeatmapTileSizePx + (cellX + 0.5) * PhotoHeatmapCellSizePx
+
+    val centerY: Double
+        get() = tileY * PhotoHeatmapTileSizePx + (cellY + 0.5) * PhotoHeatmapCellSizePx
+
+    companion object {
+        fun fromMercator(
+            zoom: Int,
+            x: Double,
+            y: Double
+        ): PhotoHeatmapCellKey {
+            val tileCount = 1 shl zoom
+            val normalizedX = x.coerceIn(0.0, tileCount * PhotoHeatmapTileSizePx - 1.0)
+            val normalizedY = y.coerceIn(0.0, tileCount * PhotoHeatmapTileSizePx - 1.0)
+            val tileX = floor(normalizedX / PhotoHeatmapTileSizePx).toInt().coerceIn(0, tileCount - 1)
+            val tileY = floor(normalizedY / PhotoHeatmapTileSizePx).toInt().coerceIn(0, tileCount - 1)
+            val localX = normalizedX - tileX * PhotoHeatmapTileSizePx
+            val localY = normalizedY - tileY * PhotoHeatmapTileSizePx
+            val cellX = floor(localX / PhotoHeatmapCellSizePx)
+                .toInt()
+                .coerceIn(0, PhotoHeatmapCellsPerTile - 1)
+            val cellY = floor(localY / PhotoHeatmapCellSizePx)
+                .toInt()
+                .coerceIn(0, PhotoHeatmapCellsPerTile - 1)
+            return PhotoHeatmapCellKey(
+                zoom = zoom,
+                tileX = tileX,
+                tileY = tileY,
+                cellX = cellX,
+                cellY = cellY
+            )
+        }
+    }
+}
 
 private class MutablePhotoHeatmapCell(
-    private val id: String
+    private val key: PhotoHeatmapCellKey,
+    private val latitude: Double,
+    private val longitude: Double
 ) {
     private var photoCount = 0
-    private var weightedLatitude = 0.0
-    private var weightedLongitude = 0.0
     private var minTakenAt: Long? = null
     private var maxTakenAt: Long? = null
 
     fun add(point: PhotoHeatmapPoint) {
         photoCount += 1
-        weightedLatitude += point.latitude
-        weightedLongitude += point.longitude
         point.takenAt?.let { takenAt ->
             minTakenAt = minTakenAt?.let { current -> minOf(current, takenAt) } ?: takenAt
             maxTakenAt = maxTakenAt?.let { current -> maxOf(current, takenAt) } ?: takenAt
@@ -239,11 +275,15 @@ private class MutablePhotoHeatmapCell(
     }
 
     fun toCell(): PhotoHeatmapCell {
-        val safeCount = photoCount.coerceAtLeast(1)
         return PhotoHeatmapCell(
-            id = id,
-            latitude = weightedLatitude / safeCount,
-            longitude = weightedLongitude / safeCount,
+            id = key.id,
+            zoom = key.zoom,
+            tileX = key.tileX,
+            tileY = key.tileY,
+            cellX = key.cellX,
+            cellY = key.cellY,
+            latitude = latitude,
+            longitude = longitude,
             photoCount = photoCount,
             minTakenAt = minTakenAt,
             maxTakenAt = maxTakenAt,
@@ -268,6 +308,11 @@ private fun DevicePhoto.toHeatmapPoint(): PhotoHeatmapPoint? {
 private fun PhotoHeatmapCell.toFeature(): Feature {
     return Feature.fromGeometry(Point.fromLngLat(longitude, latitude)).apply {
         addStringProperty(PHOTO_HEATMAP_CELL_ID_PROPERTY, id)
+        addNumberProperty(PHOTO_HEATMAP_ZOOM_PROPERTY, zoom)
+        addNumberProperty(PHOTO_HEATMAP_TILE_X_PROPERTY, tileX)
+        addNumberProperty(PHOTO_HEATMAP_TILE_Y_PROPERTY, tileY)
+        addNumberProperty(PHOTO_HEATMAP_CELL_X_PROPERTY, cellX)
+        addNumberProperty(PHOTO_HEATMAP_CELL_Y_PROPERTY, cellY)
         addNumberProperty(PHOTO_HEATMAP_PHOTO_COUNT_PROPERTY, photoCount)
         addNumberProperty(PHOTO_HEATMAP_WEIGHT_PROPERTY, weight)
         minTakenAt?.let { value -> addNumberProperty(PHOTO_HEATMAP_MIN_TAKEN_AT_PROPERTY, value) }
@@ -279,27 +324,8 @@ private fun PhotoMapBounds.contains(latitude: Double, longitude: Double): Boolea
     return latitude in south..north && longitude in west..east
 }
 
-private fun photoHeatmapCellSizePx(
-    zoom: Double,
-    density: Float
-): Double {
-    val sizeDp = when {
-        zoom < 5.0 -> 36.0
-        zoom < 9.0 -> 30.0
-        zoom < 13.0 -> 24.0
-        else -> 18.0
-    }
-    return max(1.0, sizeDp * density.coerceAtLeast(1f))
-}
-
-private fun photoHeatmapAbsoluteReferenceCount(zoom: Double): Double {
-    return when {
-        zoom < 5.0 -> 500.0
-        zoom < 9.0 -> 150.0
-        zoom < 12.0 -> 40.0
-        zoom < 15.0 -> 10.0
-        else -> 3.0
-    }
+private fun photoHeatmapDataZoom(zoom: Double): Int {
+    return floor(zoom + 0.5).toInt().coerceIn(PhotoHeatmapMinZoom, PhotoHeatmapMaxZoom)
 }
 
 private fun longitudeToMercatorX(longitude: Double, worldSizePx: Double): Double {
@@ -312,18 +338,34 @@ private fun latitudeToMercatorY(latitude: Double, worldSizePx: Double): Double {
     return (0.5 - ln((1.0 + sinLatitude) / (1.0 - sinLatitude)) / (4.0 * PI)) * worldSizePx
 }
 
+private fun mercatorXToLongitude(x: Double, worldSizePx: Double): Double {
+    return x / worldSizePx * 360.0 - 180.0
+}
+
+private fun mercatorYToLatitude(y: Double, worldSizePx: Double): Double {
+    val n = PI - 2.0 * PI * y / worldSizePx
+    return atan(sinh(n)) * 180.0 / PI
+}
+
 internal const val PHOTO_HEATMAP_WEIGHT_PROPERTY = "weight"
 internal const val PHOTO_HEATMAP_CELL_ID_PROPERTY = "cell_id"
+internal const val PHOTO_HEATMAP_ZOOM_PROPERTY = "zoom"
+internal const val PHOTO_HEATMAP_TILE_X_PROPERTY = "tile_x"
+internal const val PHOTO_HEATMAP_TILE_Y_PROPERTY = "tile_y"
+internal const val PHOTO_HEATMAP_CELL_X_PROPERTY = "cell_x"
+internal const val PHOTO_HEATMAP_CELL_Y_PROPERTY = "cell_y"
 internal const val PHOTO_HEATMAP_PHOTO_COUNT_PROPERTY = "photo_count"
 internal const val PHOTO_HEATMAP_MIN_TAKEN_AT_PROPERTY = "min_taken_at"
 internal const val PHOTO_HEATMAP_MAX_TAKEN_AT_PROPERTY = "max_taken_at"
 
 private const val PhotoHeatmapTileSizePx = 256.0
+private const val PhotoHeatmapCellsPerTile = 32
+private const val PhotoHeatmapCellSizePx = PhotoHeatmapTileSizePx / PhotoHeatmapCellsPerTile
+private const val PhotoHeatmapMinZoom = 0
+private const val PhotoHeatmapMaxZoom = 20
 private const val PhotoHeatmapViewportPaddingFactor = 0.15
 private const val PhotoHeatmapCancellationCheckInterval = 512
 private const val PhotoHeatmapLocalReferencePercentile = 0.95
-private const val PhotoHeatmapMinLocalReferenceCount = 2.0
-private const val PhotoHeatmapLocalWeightRatio = 0.8
-private const val PhotoHeatmapAbsoluteWeightRatio = 0.2
-private const val PhotoHeatmapMinWeight = 0.05
+private const val PhotoHeatmapMinLocalReferenceCount = 1.0
+private const val PhotoHeatmapMinWeight = 0.08
 private const val PhotoHeatmapMaxMercatorLatitude = 85.05112878

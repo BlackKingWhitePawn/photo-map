@@ -8,6 +8,23 @@
 
 Изменений пока нет.
 
+## [0.12.0] - 2026-07-18
+
+### Added
+
+* Added a lazy heatmap mini-gallery timeline that pages nearby photos while keeping the selected location marker in sync.
+* Added a trip-card share action that generates a local PNG with trip analytics and shares it through FileProvider.
+* Added direct "On this day" map opening with a one-day date range and the range picker expanded.
+
+### Changed
+
+* Reworked the photo heatmap into presence and density layers so every geotagged photo contributes at every zoom.
+* Selected heatmap photos now use a standalone location icon marker without the extra halo circle.
+* Heatmap mini-gallery swipes can fling across multiple photos and marker/camera movement follows the active photo.
+* Trip photo scrubbers reserve layout space and animate the gallery scroll instead of jumping over cards.
+* Removed the trips and density FABs from the map's bottom controls.
+* Android app metadata is now `versionName=0.12.0`, `versionCode=18`.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

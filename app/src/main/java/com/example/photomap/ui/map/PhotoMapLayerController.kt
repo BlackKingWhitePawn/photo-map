@@ -1,5 +1,9 @@
 package com.example.photomap.ui.map
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.util.Log
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.core.util.AppDiagnostics
@@ -19,6 +23,7 @@ import org.maplibre.android.style.layers.PropertyFactory.circleRadius
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
 import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
 import org.maplibre.android.style.layers.PropertyFactory.iconAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.iconAnchor
 import org.maplibre.android.style.layers.PropertyFactory.iconIgnorePlacement
 import org.maplibre.android.style.layers.PropertyFactory.iconImage
 import org.maplibre.android.style.layers.PropertyFactory.iconSize
@@ -94,14 +99,18 @@ class PhotoMapLayerController {
         featureCollection: FeatureCollection
     ) {
         val source = style.getSourceAs<GeoJsonSource>(PHOTO_HEATMAP_SOURCE_ID)
-        if (source == null || !isPhotoHeatmapConfigured || style.getLayer(PHOTO_HEATMAP_LAYER_ID) == null) {
+        if (source == null ||
+            !isPhotoHeatmapConfigured ||
+            style.getLayer(PHOTO_COVERAGE_LAYER_ID) == null ||
+            style.getLayer(PHOTO_DENSITY_HEATMAP_LAYER_ID) == null
+        ) {
             Log.d(
                 PhotoMapLayerLogTag,
-                "Recreate photo heatmap layer: features=${featureCollection.features()?.size}"
+                "Recreate photo heatmap layers: features=${featureCollection.features()?.size}"
             )
             AppDiagnostics.record(
                 PhotoMapLayerLogTag,
-                "Recreate photo heatmap layer: features=${featureCollection.features()?.size}"
+                "Recreate photo heatmap layers: features=${featureCollection.features()?.size}"
             )
             style.recreatePhotoHeatmapLayer(featureCollection)
             isPhotoHeatmapConfigured = true
@@ -125,7 +134,6 @@ class PhotoMapLayerController {
         val source = style.getSourceAs<GeoJsonSource>(SELECTED_PHOTO_SOURCE_ID)
         if (source == null ||
             !isSelectedPhotoConfigured ||
-            style.getLayer(SELECTED_PHOTO_HALO_LAYER_ID) == null ||
             style.getLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID) == null
         ) {
             Log.d(
@@ -217,7 +225,9 @@ class PhotoMapLayerController {
         PhotoMapLayerIds.forEach { layerId ->
             style.setLayerVisible(layerId = layerId, visible = showPhotos)
         }
-        style.setLayerVisible(layerId = PHOTO_HEATMAP_LAYER_ID, visible = showHeatmap)
+        PhotoHeatmapLayerIds.forEach { layerId ->
+            style.setLayerVisible(layerId = layerId, visible = showHeatmap)
+        }
         SelectedPhotoLayerIds.forEach { layerId ->
             style.setLayerVisible(layerId = layerId, visible = showHeatmap)
         }
@@ -333,6 +343,8 @@ private fun Style.recreatePhotoMapLayers(
 }
 
 private fun Style.recreatePhotoHeatmapLayer(featureCollection: FeatureCollection) {
+    removeLayer(PHOTO_DENSITY_HEATMAP_LAYER_ID)
+    removeLayer(PHOTO_COVERAGE_LAYER_ID)
     removeLayer(PHOTO_HEATMAP_LAYER_ID)
     removeSource(PHOTO_HEATMAP_SOURCE_ID)
 
@@ -343,7 +355,34 @@ private fun Style.recreatePhotoHeatmapLayer(featureCollection: FeatureCollection
         )
     )
 
-    val heatmapLayer = HeatmapLayer(PHOTO_HEATMAP_LAYER_ID, PHOTO_HEATMAP_SOURCE_ID)
+    val coverageLayer = HeatmapLayer(PHOTO_COVERAGE_LAYER_ID, PHOTO_HEATMAP_SOURCE_ID)
+        .withProperties(
+            heatmapWeight(0.18f),
+            heatmapColor(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.heatmapDensity(),
+                    Expression.stop(0.00f, Expression.rgba(124, 58, 237, 0.0f)),
+                    Expression.stop(0.01f, Expression.rgba(124, 58, 237, 0.16f)),
+                    Expression.stop(0.18f, Expression.rgba(124, 58, 237, 0.30f)),
+                    Expression.stop(1.00f, Expression.rgba(124, 58, 237, 0.42f))
+                )
+            ),
+            heatmapIntensity(1.0f),
+            heatmapRadius(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.stop(3, 20f),
+                    Expression.stop(8, 25f),
+                    Expression.stop(13, 30f),
+                    Expression.stop(17, 34f)
+                )
+            ),
+            heatmapOpacity(0.68f)
+        )
+
+    val heatmapLayer = HeatmapLayer(PHOTO_DENSITY_HEATMAP_LAYER_ID, PHOTO_HEATMAP_SOURCE_ID)
         .withProperties(
             heatmapWeight(Expression.get(PHOTO_HEATMAP_WEIGHT_PROPERTY)),
             heatmapColor(
@@ -374,28 +413,32 @@ private fun Style.recreatePhotoHeatmapLayer(featureCollection: FeatureCollection
 
     val photoLayerId = PhotoMapLayerIds.firstOrNull { layerId -> getLayer(layerId) != null }
     if (photoLayerId != null) {
-        addLayerBelow(heatmapLayer, photoLayerId)
+        addLayerBelow(coverageLayer, photoLayerId)
+        addLayerAbove(heatmapLayer, PHOTO_COVERAGE_LAYER_ID)
         return
     }
 
     val selectedLayerId = SelectedPhotoLayerIds.firstOrNull { layerId -> getLayer(layerId) != null }
     if (selectedLayerId != null) {
-        addLayerBelow(heatmapLayer, selectedLayerId)
+        addLayerBelow(coverageLayer, selectedLayerId)
+        addLayerAbove(heatmapLayer, PHOTO_COVERAGE_LAYER_ID)
         return
     }
 
     val topBaseLayerId = layers.lastOrNull()?.id
     if (topBaseLayerId == null) {
-        addLayer(heatmapLayer)
+        addLayer(coverageLayer)
     } else {
-        addLayerAbove(heatmapLayer, topBaseLayerId)
+        addLayerAbove(coverageLayer, topBaseLayerId)
     }
+    addLayerAbove(heatmapLayer, PHOTO_COVERAGE_LAYER_ID)
 }
 
 private fun Style.recreateSelectedPhotoMarkerLayers(featureCollection: FeatureCollection) {
     removeLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID)
     removeLayer(SELECTED_PHOTO_HALO_LAYER_ID)
     removeSource(SELECTED_PHOTO_SOURCE_ID)
+    ensureSelectedPhotoMarkerIcon()
 
     addSource(
         GeoJsonSource(
@@ -404,26 +447,18 @@ private fun Style.recreateSelectedPhotoMarkerLayers(featureCollection: FeatureCo
         )
     )
 
-    val haloLayer = CircleLayer(SELECTED_PHOTO_HALO_LAYER_ID, SELECTED_PHOTO_SOURCE_ID)
-        .withProperties(
-            circleRadius(24f),
-            circleColor(0xFFFFFFFF.toInt()),
-            circleOpacity(0.76f),
-            circleStrokeColor(0xFF14B8A6.toInt()),
-            circleStrokeWidth(3f)
-        )
     val symbolLayer = SymbolLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID, SELECTED_PHOTO_SOURCE_ID)
         .withProperties(
-            textField("+"),
-            textSize(30f),
-            textColor(0xFF7C3AED.toInt()),
-            textHaloColor(0xFFFFFFFF.toInt()),
-            textHaloWidth(2.0f),
-            textAllowOverlap(true),
-            textIgnorePlacement(true)
+            iconImage(SELECTED_PHOTO_MARKER_ICON_ID),
+            iconSize(1.0f),
+            iconAnchor(Property.ICON_ANCHOR_BOTTOM),
+            iconAllowOverlap(true),
+            iconIgnorePlacement(true)
         )
 
     val anchorLayerId = listOf(
+        PHOTO_DENSITY_HEATMAP_LAYER_ID,
+        PHOTO_COVERAGE_LAYER_ID,
         PHOTO_HEATMAP_LAYER_ID,
         PHOTO_CLUSTER_LAYER_ID,
         PHOTO_CLUSTER_THUMBNAIL_LAYER_ID,
@@ -435,14 +470,56 @@ private fun Style.recreateSelectedPhotoMarkerLayers(featureCollection: FeatureCo
     if (anchorLayerId == null) {
         val topBaseLayerId = layers.lastOrNull()?.id
         if (topBaseLayerId == null) {
-            addLayer(haloLayer)
+            addLayer(symbolLayer)
         } else {
-            addLayerAbove(haloLayer, topBaseLayerId)
+            addLayerAbove(symbolLayer, topBaseLayerId)
         }
     } else {
-        addLayerAbove(haloLayer, anchorLayerId)
+        addLayerAbove(symbolLayer, anchorLayerId)
     }
-    addLayerAbove(symbolLayer, SELECTED_PHOTO_HALO_LAYER_ID)
+}
+
+private fun Style.ensureSelectedPhotoMarkerIcon() {
+    runCatching { removeImage(SELECTED_PHOTO_MARKER_ICON_ID) }
+    addImage(SELECTED_PHOTO_MARKER_ICON_ID, createSelectedPhotoMarkerIcon())
+}
+
+private fun createSelectedPhotoMarkerIcon(): Bitmap {
+    val size = SelectedPhotoMarkerIconPx
+    val centerX = size / 2f
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val pinPath = Path().apply {
+        moveTo(centerX, size - 4f)
+        cubicTo(25f, 48f, 12f, 39f, 12f, 25f)
+        cubicTo(12f, 12f, 21f, 6f, centerX, 6f)
+        cubicTo(43f, 6f, 52f, 12f, 52f, 25f)
+        cubicTo(52f, 39f, 39f, 48f, centerX, size - 4f)
+        close()
+    }
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xFF7C3AED.toInt()
+    }
+    canvas.drawPath(pinPath, paint)
+
+    paint.apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+        color = 0xFFFFFFFF.toInt()
+    }
+    canvas.drawPath(pinPath, paint)
+
+    paint.apply {
+        style = Paint.Style.FILL
+        color = 0xFFFFFFFF.toInt()
+    }
+    canvas.drawCircle(centerX, 25f, 11f, paint)
+
+    paint.color = 0xFF14B8A6.toInt()
+    canvas.drawCircle(centerX, 25f, 5.5f, paint)
+
+    return bitmap
 }
 
 private fun Style.recreateTripHeatmapLayer(featureCollection: FeatureCollection) {
@@ -572,12 +649,15 @@ const val PHOTO_MAP_SOURCE_ID = "photo-map-source"
 const val PHOTO_THUMBNAIL_SOURCE_ID = "photo-thumbnail-source"
 const val PHOTO_HEATMAP_SOURCE_ID = "photo-heatmap-source"
 const val SELECTED_PHOTO_SOURCE_ID = "selected-photo-source"
+const val SELECTED_PHOTO_MARKER_ICON_ID = "selected-photo-location-icon"
 const val PHOTO_CLUSTER_LAYER_ID = "photo-cluster-layer"
 const val PHOTO_CLUSTER_THUMBNAIL_LAYER_ID = "photo-cluster-thumbnail-layer"
 const val PHOTO_CLUSTER_COUNT_LAYER_ID = "photo-cluster-count-layer"
 const val PHOTO_UNCLUSTERED_LAYER_ID = "photo-unclustered-layer"
 const val PHOTO_THUMBNAIL_LAYER_ID = "photo-thumbnail-layer"
 const val PHOTO_HEATMAP_LAYER_ID = "photo-heatmap-layer"
+const val PHOTO_COVERAGE_LAYER_ID = "photo-coverage-layer"
+const val PHOTO_DENSITY_HEATMAP_LAYER_ID = "photo-density-heatmap-layer"
 const val SELECTED_PHOTO_HALO_LAYER_ID = "selected-photo-halo-layer"
 const val SELECTED_PHOTO_SYMBOL_LAYER_ID = "selected-photo-symbol-layer"
 const val TRIP_HEATMAP_SOURCE_ID = "trip-heatmap-source"
@@ -591,9 +671,14 @@ private val PhotoMapLayerIds = listOf(
     PHOTO_THUMBNAIL_LAYER_ID
 )
 
+private val PhotoHeatmapLayerIds = listOf(
+    PHOTO_COVERAGE_LAYER_ID,
+    PHOTO_DENSITY_HEATMAP_LAYER_ID
+)
+
 private val SelectedPhotoLayerIds = listOf(
-    SELECTED_PHOTO_HALO_LAYER_ID,
     SELECTED_PHOTO_SYMBOL_LAYER_ID
 )
 
 private const val PhotoMapLayerLogTag = "PhotoMapMap"
+private const val SelectedPhotoMarkerIconPx = 64

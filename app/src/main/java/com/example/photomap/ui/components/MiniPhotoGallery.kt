@@ -10,9 +10,13 @@ import android.net.Uri
 import android.util.Log
 import android.util.Size
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,39 +24,61 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import android.text.format.DateFormat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 @Composable
 fun MiniPhotoGallery(
@@ -128,6 +154,215 @@ fun MiniPhotoThumbnail(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+fun MiniGalleryTimeScrubber(
+    photos: List<DevicePhoto>,
+    selectedPhotoId: Long?,
+    onPhotoSelected: (DevicePhoto) -> Unit,
+    modifier: Modifier = Modifier,
+    allPhotoIds: List<Long> = emptyList(),
+    totalCount: Int = if (allPhotoIds.isNotEmpty()) allPhotoIds.size else photos.size,
+    onScrubbingChanged: (Boolean) -> Unit = {}
+) {
+    val selectionPhotoIds = remember(photos, allPhotoIds) {
+        allPhotoIds.takeIf { ids -> ids.isNotEmpty() } ?: photos.map { photo -> photo.mediaId }
+    }
+    val timeline = remember(photos, selectionPhotoIds, totalCount) {
+        buildMiniGalleryTimeline(
+            photos = photos,
+            allPhotoIds = selectionPhotoIds,
+            totalCount = totalCount
+        )
+    } ?: return
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    var handleFraction by remember(timeline) {
+        mutableStateOf(timeline.fractionForPhotoId(selectedPhotoId))
+    }
+    var isDragging by remember { mutableStateOf(false) }
+    var showExpandedLabel by remember { mutableStateOf(false) }
+    var lastDragSelectionAtMs by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(timeline, selectedPhotoId, isDragging) {
+        if (!isDragging) {
+            handleFraction = timeline.fractionForPhotoId(selectedPhotoId)
+        }
+    }
+    LaunchedEffect(showExpandedLabel, isDragging, selectedPhotoId) {
+        if (showExpandedLabel && !isDragging) {
+            delay(MiniGalleryTimeScrubberLabelHideDelayMs)
+            showExpandedLabel = false
+        }
+    }
+
+    val labelPhoto = remember(timeline, handleFraction, selectedPhotoId, isDragging) {
+        if (isDragging) {
+            timeline.photoForFraction(handleFraction)
+        } else {
+            timeline.photoForId(selectedPhotoId) ?: timeline.photoForFraction(handleFraction)
+        }
+    }
+    val compactLabel = remember(context, labelPhoto, timeline) {
+        labelPhoto?.let { photo ->
+            formatMiniGalleryScrubberDate(
+                context = context,
+                photo = photo,
+                timeline = timeline,
+                detailed = false
+            )
+        }.orEmpty()
+    }
+    val expandedLabel = remember(context, labelPhoto, timeline) {
+        labelPhoto?.let { photo ->
+            formatMiniGalleryScrubberDate(
+                context = context,
+                photo = photo,
+                timeline = timeline,
+                detailed = true
+            )
+        } ?: compactLabel
+    }
+
+    BoxWithConstraints(
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+    ) {
+        val maxHeightPx = with(density) { maxHeight.toPx() }
+        if (maxHeightPx <= 0f) {
+            return@BoxWithConstraints
+        }
+        val handleHeightPx = with(density) { MiniGalleryTimeScrubberHandleHeight.toPx() }
+        val verticalPaddingPx = with(density) { MiniGalleryTimeScrubberVerticalPadding.toPx() }
+        val trackHeightPx = (maxHeightPx - handleHeightPx - verticalPaddingPx * 2f).coerceAtLeast(1f)
+        val handleTopPx = verticalPaddingPx + trackHeightPx * handleFraction.coerceIn(0f, 1f)
+        val handleOffsetXPx = with(density) { MiniGalleryTimeScrubberHandleOutset.toPx().roundToInt() }
+        val bubbleOffsetXPx = with(density) {
+            -(
+                MiniGalleryTimeScrubberHandleWidth +
+                    MiniGalleryTimeScrubberExpandedLabelWidth +
+                    6.dp
+                ).toPx().roundToInt()
+        }
+
+        fun selectFraction(
+            fraction: Float,
+            force: Boolean
+        ) {
+            val nextFraction = fraction.coerceIn(0f, 1f)
+            handleFraction = nextFraction
+            val photo = timeline.photoForFraction(nextFraction) ?: return
+            val now = android.os.SystemClock.uptimeMillis()
+            if (force || now - lastDragSelectionAtMs >= MiniGalleryTimeScrubberDragFrameMs) {
+                lastDragSelectionAtMs = now
+                onPhotoSelected(photo)
+            }
+        }
+
+        AnimatedVisibility(
+            visible = showExpandedLabel || isDragging,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset {
+                    IntOffset(
+                        x = bubbleOffsetXPx,
+                        y = handleTopPx.roundToInt()
+                    )
+                },
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Surface(
+                modifier = Modifier.size(
+                    width = MiniGalleryTimeScrubberExpandedLabelWidth,
+                    height = MiniGalleryTimeScrubberExpandedLabelHeight
+                ),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shadowElevation = 6.dp
+            ) {
+                Box(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = expandedLabel,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset {
+                    IntOffset(
+                        x = handleOffsetXPx,
+                        y = handleTopPx.roundToInt()
+                    )
+                }
+                .size(
+                    width = MiniGalleryTimeScrubberHandleWidth,
+                    height = MiniGalleryTimeScrubberHandleHeight
+                )
+                .pointerInput(timeline, trackHeightPx) {
+                    detectDragGestures(
+                        onDragStart = {
+                            isDragging = true
+                            showExpandedLabel = true
+                            lastDragSelectionAtMs = 0L
+                            onScrubbingChanged(true)
+                        },
+                        onDragEnd = {
+                            selectFraction(handleFraction, force = true)
+                            isDragging = false
+                            onScrubbingChanged(false)
+                        },
+                        onDragCancel = {
+                            selectFraction(handleFraction, force = true)
+                            isDragging = false
+                            onScrubbingChanged(false)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            selectFraction(
+                                fraction = handleFraction + dragAmount.y / trackHeightPx,
+                                force = false
+                            )
+                        }
+                    )
+                },
+            shape = RoundedCornerShape(
+                topStart = 28.dp,
+                topEnd = 0.dp,
+                bottomEnd = 0.dp,
+                bottomStart = 28.dp
+            ),
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+            shadowElevation = 8.dp
+        ) {
+            Box(
+                modifier = Modifier.padding(start = 10.dp, end = 36.dp, top = 6.dp, bottom = 6.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Text(
+                    text = compactLabel,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
@@ -292,6 +527,172 @@ private fun formatPhotoDateGridDay(day: Long): String {
     return DateFormat.format("d MMMM yyyy", Date(photoDateDayToMillis(day))).toString()
 }
 
+private fun buildMiniGalleryTimeline(
+    photos: List<DevicePhoto>,
+    allPhotoIds: List<Long>,
+    totalCount: Int
+): MiniGalleryTimeline? {
+    if (totalCount <= MiniGalleryTimeScrubberMinimumPhotos ||
+        allPhotoIds.size <= MiniGalleryTimeScrubberMinimumPhotos ||
+        photos.size != allPhotoIds.size
+    ) {
+        return null
+    }
+    val photosById = photos.associateBy { photo -> photo.mediaId }
+    val orderedPhotos = allPhotoIds.mapNotNull { photoId -> photosById[photoId] }
+    if (orderedPhotos.size != allPhotoIds.size) {
+        return null
+    }
+    val datedEntries = orderedPhotos
+        .mapIndexedNotNull { index, photo ->
+            photo.photoDateMillis()?.let { millis ->
+                MiniGalleryTimelineEntry(
+                    index = index,
+                    photo = photo,
+                    millis = millis
+                )
+            }
+        }
+        .sortedWith(
+            compareBy<MiniGalleryTimelineEntry> { entry -> entry.millis }
+                .thenBy { entry -> entry.index }
+        )
+    val startMillis = orderedPhotos.firstNotNullOfOrNull { photo -> photo.photoDateMillis() }
+    val endMillis = orderedPhotos.asReversed().firstNotNullOfOrNull { photo -> photo.photoDateMillis() }
+    return MiniGalleryTimeline(
+        photos = orderedPhotos,
+        indexByPhotoId = orderedPhotos.withIndex().associate { (index, photo) -> photo.mediaId to index },
+        datedEntries = datedEntries,
+        startMillis = startMillis,
+        endMillis = endMillis
+    )
+}
+
+private fun formatMiniGalleryScrubberDate(
+    context: Context,
+    photo: DevicePhoto,
+    timeline: MiniGalleryTimeline,
+    detailed: Boolean
+): String {
+    val millis = photo.photoDateMillis()
+    if (millis == null) {
+        val index = timeline.indexForPhotoId(photo.mediaId)?.plus(1) ?: 1
+        return "\u0424\u043e\u0442\u043e $index/${timeline.totalCount}"
+    }
+    val pattern = if (detailed || timeline.spanMillis <= MiniGalleryTimeScrubberDetailedDateSpanMs) {
+        MiniGalleryTimeScrubberFullDatePattern
+    } else {
+        MiniGalleryTimeScrubberMonthDatePattern
+    }
+    return SimpleDateFormat(pattern, context.miniGalleryLocale()).apply {
+        timeZone = MiniGalleryTimeZone
+    }.format(Date(millis))
+}
+
+private fun Context.miniGalleryLocale(): Locale {
+    val locales = resources.configuration.locales
+    return if (locales.size() > 0) {
+        locales.get(0)
+    } else {
+        Locale.getDefault()
+    }
+}
+
+private data class MiniGalleryTimeline(
+    val photos: List<DevicePhoto>,
+    val indexByPhotoId: Map<Long, Int>,
+    val datedEntries: List<MiniGalleryTimelineEntry>,
+    val startMillis: Long?,
+    val endMillis: Long?
+) {
+    val totalCount: Int
+        get() = photos.size
+
+    val spanMillis: Long
+        get() {
+            val start = startMillis ?: return 0L
+            val end = endMillis ?: return 0L
+            return abs(end - start)
+        }
+
+    fun photoForId(photoId: Long?): DevicePhoto? {
+        val index = indexForPhotoId(photoId) ?: return null
+        return photos.getOrNull(index)
+    }
+
+    fun indexForPhotoId(photoId: Long?): Int? {
+        return photoId?.let { id -> indexByPhotoId[id] }
+    }
+
+    fun fractionForPhotoId(photoId: Long?): Float {
+        val index = indexForPhotoId(photoId) ?: 0
+        return indexFraction(index)
+    }
+
+    fun photoForFraction(fraction: Float): DevicePhoto? {
+        if (photos.isEmpty()) {
+            return null
+        }
+        val boundedFraction = fraction.coerceIn(0f, 1f)
+        val start = startMillis
+        val end = endMillis
+        if (start != null && end != null && start != end && datedEntries.size >= 2) {
+            val targetMillis = start + ((end - start) * boundedFraction).roundToLong()
+            return nearestPhotoForMillis(targetMillis) ?: photoForIndexFraction(boundedFraction)
+        }
+        return photoForIndexFraction(boundedFraction)
+    }
+
+    private fun nearestPhotoForMillis(targetMillis: Long): DevicePhoto? {
+        val exactIndex = datedEntries.binarySearchBy(targetMillis) { entry -> entry.millis }
+        if (exactIndex >= 0) {
+            return datedEntries[exactIndex].photo
+        }
+        val nextIndex = -exactIndex - 1
+        val candidates = listOfNotNull(
+            datedEntries.getOrNull(nextIndex - 1),
+            datedEntries.getOrNull(nextIndex)
+        )
+        return candidates
+            .minWithOrNull(
+                compareBy<MiniGalleryTimelineEntry> { entry -> abs(entry.millis - targetMillis) }
+                    .thenBy { entry -> abs(indexFraction(entry.index) - fractionForMillis(targetMillis)) }
+            )
+            ?.photo
+    }
+
+    private fun fractionForMillis(millis: Long): Float {
+        val start = startMillis ?: return 0f
+        val end = endMillis ?: return 0f
+        if (start == end) {
+            return 0f
+        }
+        return ((millis - start).toDouble() / (end - start).toDouble())
+            .toFloat()
+            .coerceIn(0f, 1f)
+    }
+
+    private fun photoForIndexFraction(fraction: Float): DevicePhoto? {
+        val index = (fraction.coerceIn(0f, 1f) * photos.lastIndex).roundToInt()
+            .coerceIn(0, photos.lastIndex)
+        return photos.getOrNull(index)
+    }
+
+    private fun indexFraction(index: Int): Float {
+        return if (photos.size <= 1) {
+            0f
+        } else {
+            index.coerceIn(0, photos.lastIndex).toFloat() / photos.lastIndex.toFloat()
+        }
+    }
+}
+
+private data class MiniGalleryTimelineEntry(
+    val index: Int,
+    val photo: DevicePhoto,
+    val millis: Long
+)
+
 fun Context.openMiniGalleryPhoto(photo: DevicePhoto) {
     val activity = this as? Activity ?: return
     runCatching {
@@ -338,7 +739,20 @@ private fun Context.loadMiniGalleryThumbnail(
 private const val MiniPhotoThumbnailPx = 260
 private const val MiniPhotoGalleryLogTag = "PhotoMapMiniGallery"
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
+private const val MiniGalleryTimeScrubberMinimumPhotos = 30
+private const val MiniGalleryTimeScrubberDragFrameMs = 32L
+private const val MiniGalleryTimeScrubberLabelHideDelayMs = 800L
+private const val MiniGalleryTimeScrubberDetailedDateSpanMs = 92L * MillisPerDay
+private const val MiniGalleryTimeScrubberMonthDatePattern = "MMMM yyyy"
+private const val MiniGalleryTimeScrubberFullDatePattern = "d MMMM yyyy"
 private val PhotoDateGridDefaultThumbnailSize = 74.dp
 private val PhotoDateGridDefaultSpacing = 8.dp
 private val PhotoDateGridDefaultDaySpacing = 18.dp
 private const val PhotoDateGridDefaultMaxColumns = 6
+private val MiniGalleryTimeScrubberHandleWidth = 112.dp
+private val MiniGalleryTimeScrubberHandleHeight = 54.dp
+private val MiniGalleryTimeScrubberHandleOutset = 34.dp
+private val MiniGalleryTimeScrubberVerticalPadding = 12.dp
+private val MiniGalleryTimeScrubberExpandedLabelWidth = 132.dp
+private val MiniGalleryTimeScrubberExpandedLabelHeight = 46.dp
+private val MiniGalleryTimeZone: TimeZone = TimeZone.getTimeZone("UTC")

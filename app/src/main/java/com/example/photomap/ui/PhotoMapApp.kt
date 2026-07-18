@@ -49,6 +49,7 @@ fun PhotoMapApp(
     var mapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
     var mapFocusPhotoIds by remember { mutableStateOf<Set<Long>?>(null) }
     var mapFocusRequestKey by remember { mutableStateOf(0) }
+    var mapDateFilterPanelRequestKey by remember { mutableStateOf(0) }
     var tripMapCameraState by remember { mutableStateOf<TripMapCameraState?>(null) }
 
     LaunchedEffect(state.permissionStatus.canReadImages, currentRoute) {
@@ -110,6 +111,13 @@ fun PhotoMapApp(
         navigateSingleTop(Routes.Map)
     }
 
+    fun openMapForDateFilterDay(day: Long) {
+        mapFocusPhotoIds = null
+        viewModel.setMapDateFilter(day, day)
+        mapDateFilterPanelRequestKey += 1
+        navigateSingleTop(Routes.Map)
+    }
+
     fun openTripDetails(tripId: Long) {
         focusTripOnTripMap(tripId)
         navController.navigate(Routes.tripDetails(tripId))
@@ -154,6 +162,7 @@ fun PhotoMapApp(
                     mapFocusPhotoIds = null
                     navigateSingleTop(Routes.Map)
                 },
+                onOpenMapForDay = { day -> openMapForDateFilterDay(day) },
                 onOpenAllTrips = { openTripsFromMap() },
                 onOpenTrip = { tripId -> openTripDetails(tripId) },
                 onOpenAllPlaces = { navigateSingleTop(Routes.Places) },
@@ -180,10 +189,9 @@ fun PhotoMapApp(
                 onResume = viewModel::resumeCurrentAction,
                 onCancel = viewModel::cancelCurrentAction,
                 onOpenSettings = { navigateSingleTop(Routes.Settings) },
-                onOpenTrips = { openTripsFromMap() },
-                onClusterDensityChanged = viewModel::setClusterDensityCoefficientPercent,
                 onDateFilterChanged = viewModel::setMapDateFilter,
                 onDateFilterReset = viewModel::resetMapDateFilter,
+                openDateFilterRequestKey = mapDateFilterPanelRequestKey,
                 focusPhotoIds = mapFocusPhotoIds,
                 focusRequestKey = mapFocusRequestKey,
                 onCameraStateChanged = { cameraState -> mapCameraState = cameraState },

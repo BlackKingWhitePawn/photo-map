@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBars
@@ -99,6 +100,7 @@ import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.ui.components.MiniGalleryTimeScrubber
 import com.example.photomap.ui.components.MiniPhotoGallery
 import com.example.photomap.ui.components.PhotoDateGridDay
 import com.example.photomap.ui.components.PhotoDateGridGroup
@@ -295,13 +297,26 @@ fun TripDetailsScreen(
             activeDayCount = tripMarker?.activeDayCount
         )
     }
-    val onRoutePhotoClick: (Long) -> Unit = { photoId ->
+    fun selectRoutePhoto(
+        photoId: Long,
+        animateGalleryScroll: Boolean
+    ) {
         selectedPhotoId = photoId
         photoDayGroupIndexById[photoId]?.let { index ->
             coroutineScope.launch {
-                galleryListState.animateScrollToItem(index)
+                if (animateGalleryScroll) {
+                    galleryListState.animateScrollToItem(index)
+                } else {
+                    galleryListState.scrollToItem(index)
+                }
             }
         }
+    }
+    val onRoutePhotoClick: (Long) -> Unit = { photoId ->
+        selectRoutePhoto(
+            photoId = photoId,
+            animateGalleryScroll = true
+        )
     }
 
     MaterialTheme(colorScheme = TripDarkColorScheme) {
@@ -357,11 +372,18 @@ fun TripDetailsScreen(
                             }
                         }
                         TripPhotoGallerySheet(
+                            photos = tripPhotos,
                             groups = photoDayGroups,
                             listState = galleryListState,
                             selectedPhotoId = selectedPhotoId,
                             isExpanded = isGalleryExpanded,
                             onExpandedChange = { expanded -> isGalleryExpanded = expanded },
+                            onSelectedPhotoChanged = { photo ->
+                                selectRoutePhoto(
+                                    photoId = photo.mediaId,
+                                    animateGalleryScroll = true
+                                )
+                            },
                             onPhotoClick = { photo -> context.openPhotoInDefaultGallery(photo) },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1474,11 +1496,13 @@ private fun TripRoutePhotoMarker(
 
 @Composable
 private fun TripPhotoGallerySheet(
+    photos: List<DevicePhoto>,
     groups: List<PhotoDateGridGroup>,
     listState: LazyListState,
     selectedPhotoId: Long?,
     isExpanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    onSelectedPhotoChanged: (DevicePhoto) -> Unit,
     onPhotoClick: (DevicePhoto) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1489,7 +1513,8 @@ private fun TripPhotoGallerySheet(
         contentColor = Color.White,
         shadowElevation = 10.dp
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1538,7 +1563,11 @@ private fun TripPhotoGallerySheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
-                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 18.dp),
+                    contentPadding = PaddingValues(
+                        start = 12.dp,
+                        end = if (isExpanded) TripGalleryScrubberReservedWidth else 12.dp,
+                        bottom = 18.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(18.dp)
                 ) {
                     items(groups, key = { group -> group.day }) { group ->
@@ -1552,6 +1581,18 @@ private fun TripPhotoGallerySheet(
                     }
                 }
             }
+            }
+            if (isExpanded) {
+                MiniGalleryTimeScrubber(
+                    photos = photos,
+                    selectedPhotoId = selectedPhotoId,
+                    onPhotoSelected = onSelectedPhotoChanged,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(TripGalleryScrubberReservedWidth)
+                )
+            }
         }
     }
 }
@@ -1563,6 +1604,7 @@ private fun TripPhotoGallerySheet(
     selectedPhotoId: Long?,
     isExpanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    onSelectedPhotoChanged: (DevicePhoto) -> Unit = {},
     onPhotoClick: (DevicePhoto) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1573,7 +1615,8 @@ private fun TripPhotoGallerySheet(
         contentColor = Color.White,
         shadowElevation = 10.dp
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1641,8 +1684,21 @@ private fun TripPhotoGallerySheet(
                 onPhotoClick = onPhotoClick,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(end = if (isExpanded) TripGalleryScrubberReservedWidth else 0.dp)
                     .weight(1f)
             )
+            }
+            if (isExpanded) {
+                MiniGalleryTimeScrubber(
+                    photos = photos,
+                    selectedPhotoId = selectedPhotoId,
+                    onPhotoSelected = onSelectedPhotoChanged,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .fillMaxHeight()
+                        .width(TripGalleryScrubberReservedWidth)
+                )
+            }
         }
     }
 }
@@ -2344,6 +2400,7 @@ private val TripPhotoScrubberThumbHeight = 31.dp
 private val TripPhotoScrubberTrackPadding = 18.dp
 private val TripPhotoScrubberTrackWidth = 3.dp
 private val TripGalleryHeight = 248.dp
+private val TripGalleryScrubberReservedWidth = 76.dp
 private const val TripGalleryExpandedFraction = 0.64f
 private const val TripGalleryDragThresholdPx = 24f
 private const val TripMiniGalleryMaxItems = 36

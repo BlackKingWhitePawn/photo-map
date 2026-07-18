@@ -61,13 +61,13 @@ class PhotoMapLayerController {
         if (source == null || configuredSourceKey != sourceKey || !style.hasPhotoMapLayers()) {
             Log.d(
                 PhotoMapLayerLogTag,
-                "Recreate photo map layers: features=${featureCollection.features()?.size}, " +
+                "Recreate Traverse layers: features=${featureCollection.features()?.size}, " +
                     "radius=${sourceKey.radiusPx}, minPoints=${sourceKey.minPoints}, " +
                     "markerScale=${sourceKey.markerScalePercent}"
             )
             AppDiagnostics.record(
                 PhotoMapLayerLogTag,
-                "Recreate photo map layers: features=${featureCollection.features()?.size}, " +
+                "Recreate Traverse layers: features=${featureCollection.features()?.size}, " +
                     "radius=${sourceKey.radiusPx}, minPoints=${sourceKey.minPoints}, " +
                     "markerScale=${sourceKey.markerScalePercent}"
             )
@@ -76,11 +76,11 @@ class PhotoMapLayerController {
         } else {
             Log.d(
                 PhotoMapLayerLogTag,
-                "Update photo map source: features=${featureCollection.features()?.size}"
+                "Update Traverse source: features=${featureCollection.features()?.size}"
             )
             AppDiagnostics.record(
                 PhotoMapLayerLogTag,
-                "Update photo map source: features=${featureCollection.features()?.size}"
+                "Update Traverse source: features=${featureCollection.features()?.size}"
             )
             source.setGeoJson(featureCollection)
             style.updatePhotoMapLayerColors(colors)

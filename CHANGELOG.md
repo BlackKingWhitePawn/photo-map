@@ -8,6 +8,29 @@
 
 Изменений пока нет.
 
+## [1.0.0] - 2026-07-18
+
+### Added
+
+* Added a real MapLibre trip heatmap preview to the home gallery geography widget.
+* Added a dedicated gear drawable for settings actions across the app.
+
+### Changed
+
+* Home heatmap previews now hide political borders and country labels.
+* Trip export images now use the trip's first photo as the background.
+* Trip export analytics no longer show the confidence metric.
+* Map bottom controls now use a same-height segmented heatmap/photo switch and date button with spaced layout.
+* Settings no longer expose cluster algorithm tuning, debug controls, or diagnostic log export.
+* Renamed the visible app brand to `Traverse`.
+* Android app metadata is now `versionName=1.0.0`, `versionCode=19`.
+* Prepared the release APK asset as `app/release/traverse-v1.0.0.apk`.
+
+### Fixed
+
+* Replaced remaining wrench-style settings icons with the gear icon.
+* Fixed the missing Compose `Color` import in the map screen controls.
+
 ## [0.12.0] - 2026-07-18
 
 ### Added
@@ -39,7 +62,7 @@
 
 ### Changed
 
-* App navigation now starts at the home screen; the full photo map remains available as a separate route.
+* App navigation now starts at the home screen; the full Traverse map remains available as a separate route.
 * Permission success navigation now returns to the home screen instead of opening the full map directly.
 * Android app metadata is now `versionName=0.11.0`, `versionCode=17`.
 
@@ -63,7 +86,7 @@
 
 ### Fixed
 
-* Trip heatmap layer is now attached to both the main photo map and the trip map, so the heatmap remains visible behind trip markers.
+* Trip heatmap layer is now attached to both the main map and the trip map, so the heatmap remains visible behind trip markers.
 
 ## [0.9.0] - 2026-07-18
 
@@ -146,7 +169,7 @@
 * Fixed clusters whose photos share the same geotag so tapping them opens the mini gallery instead of endlessly zooming.
 * Fixed overlay markers during map movement: marker positions now reproject while the camera moves, but cluster composition is recalculated only after camera idle.
 * Fixed map lag and visual clutter by compacting nearby dense marker groups into larger screen clusters.
-* Fixed single-photo map markers so square thumbnails are no longer clipped by a circular marker shape.
+* Fixed single-photo markers so square thumbnails are no longer clipped by a circular marker shape.
 * Fixed EXIF scanning so newly indexed geotagged photos appear on the map during scanning, and cancelled EXIF scans resume from the last saved mark when started again.
 * Changed the first gallery permission grant to start GPS lookup in EXIF immediately instead of waiting for a separate deep scan action.
 
@@ -309,7 +332,7 @@
 * Подготовлены правила веток, коммитов, версионирования и релизов.
 * Добавлено правило `branch.md` для задания каждой рабочей ветки.
 * Добавлены правила хранения APK/AAB вне Git.
-* Инициализирован Android-проект `Photo Map`.
+* Инициализирован Android-проект `Traverse`.
 * Добавлена базовая Gradle-конфигурация.
 * Добавлен модуль `app` с package name `com.example.photomap`.
 * Добавлен минимальный Compose-интерфейс.

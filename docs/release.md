@@ -114,13 +114,13 @@ app/build/outputs/apk/release/app-release.apk
 Перед публикацией переименовывать файл по версии:
 
 ```text
-photomap-v0.1.0.apk
+traverse-v0.1.0.apk
 ```
 
 Для Google Play дополнительно готовить AAB:
 
 ```text
-photomap-v0.1.0.aab
+traverse-v0.1.0.aab
 ```
 
 APK нужен для ручной установки и скачивания с GitHub Releases. AAB нужен для публикации через Google Play и напрямую на устройство обычно не устанавливается.
@@ -147,7 +147,7 @@ Keystore хранить отдельно от репозитория и дела
 Для каждого релиза `release-notes/v<version>.md` использовать только такой порядок и набор секций:
 
 ```text
-# Photo Map v<version>
+# Traverse v<version>
 
 Date: YYYY-MM-DD
 
@@ -172,7 +172,7 @@ APK metadata, package name, `versionCode`, `versionName`, min SDK, target SDK, p
 2. Убедиться, что рабочее дерево чистое.
 3. Создать тег в формате `v<version>`.
 4. Собрать подписанный release APK.
-5. Переименовать APK в формате `photomap-v<version>.apk`.
+5. Переименовать APK в формате `traverse-v<version>.apk`.
 6. Создать GitHub Release для тега.
 7. Прикрепить APK к GitHub Release как asset.
 8. Указать в описании тега или GitHub Release release notes из этого документа.

@@ -158,6 +158,7 @@ fun PhotoMapApp(
             HomeScreen(
                 state = state,
                 places = homePlaces,
+                mapStyleUrl = BuildConfig.MAP_STYLE_URL,
                 onOpenMap = {
                     mapFocusPhotoIds = null
                     navigateSingleTop(Routes.Map)
@@ -168,6 +169,7 @@ fun PhotoMapApp(
                 onOpenAllPlaces = { navigateSingleTop(Routes.Places) },
                 onOpenPlace = { placeId -> navController.navigate(Routes.placeDetails(placeId)) },
                 onOpenSettings = { navigateSingleTop(Routes.Settings) },
+                onHeatmapViewportChanged = viewModel::onTripHeatmapViewportChanged,
                 onRefresh = { viewModel.scanPhotos() }
             )
         }
@@ -180,7 +182,7 @@ fun PhotoMapApp(
                 mapStyleUrl = BuildConfig.MAP_STYLE_URL,
                 clusterSettings = state.clusterSettings,
                 dateFilter = state.dateFilter,
-                showDebugPanel = state.showMapDebugPanel,
+                showDebugPanel = false,
                 isScanning = state.isLoading,
                 isScanPaused = state.isScanPaused,
                 scanProcessed = state.scanProcessed,
@@ -235,24 +237,7 @@ fun PhotoMapApp(
                 onScanWithExif = viewModel::scanPhotosWithExif,
                 onPause = viewModel::pauseCurrentAction,
                 onResume = viewModel::resumeCurrentAction,
-                onCancel = viewModel::cancelCurrentAction,
-                onDecreaseClusterRadius = viewModel::decreaseClusterRadius,
-                onIncreaseClusterRadius = viewModel::increaseClusterRadius,
-                onDecreaseClusterMinPoints = viewModel::decreaseClusterMinPoints,
-                onIncreaseClusterMinPoints = viewModel::increaseClusterMinPoints,
-                onDecreaseClusterLeavesPageSize = viewModel::decreaseClusterLeavesPageSize,
-                onIncreaseClusterLeavesPageSize = viewModel::increaseClusterLeavesPageSize,
-                onDecreaseClusterDensityCoefficient = viewModel::decreaseClusterDensityCoefficient,
-                onIncreaseClusterDensityCoefficient = viewModel::increaseClusterDensityCoefficient,
-                onDecreaseClusterMarkerScale = viewModel::decreaseClusterMarkerScale,
-                onIncreaseClusterMarkerScale = viewModel::increaseClusterMarkerScale,
-                onDecreaseThumbnailCellSize = viewModel::decreaseThumbnailCellSize,
-                onIncreaseThumbnailCellSize = viewModel::increaseThumbnailCellSize,
-                onDecreaseMaxVisibleThumbnails = viewModel::decreaseMaxVisibleThumbnails,
-                onIncreaseMaxVisibleThumbnails = viewModel::increaseMaxVisibleThumbnails,
-                onDecreaseThumbnailPreloadPadding = viewModel::decreaseThumbnailPreloadPadding,
-                onIncreaseThumbnailPreloadPadding = viewModel::increaseThumbnailPreloadPadding,
-                onSetMapDebugPanelVisible = viewModel::setMapDebugPanelVisible
+                onCancel = viewModel::cancelCurrentAction
             )
         }
 

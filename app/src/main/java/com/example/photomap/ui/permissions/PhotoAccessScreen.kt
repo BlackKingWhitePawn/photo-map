@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.photomap.R
 import com.example.photomap.core.permissions.PhotoAccessLevel
 import com.example.photomap.core.permissions.PhotoPermissionManager
 import com.example.photomap.domain.model.DevicePhoto
@@ -196,13 +197,13 @@ private fun PhotoAccessTopBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Photo Map",
+                text = "Traverse",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.SemiBold
             )
             OutlinedButton(onClick = onOpenAppSettings) {
                 Icon(
-                    painter = painterResource(id = android.R.drawable.ic_menu_preferences),
+                    painter = painterResource(id = R.drawable.ic_settings_gear),
                     contentDescription = null,
                     modifier = Modifier.padding(end = 8.dp)
                 )
@@ -316,7 +317,7 @@ private fun PermissionSummaryCard(
                     onClick = onOpenAppSettings
                 ) {
                     Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_manage),
+                        painter = painterResource(id = R.drawable.ic_settings_gear),
                         contentDescription = null,
                         modifier = Modifier.padding(end = 8.dp)
                     )

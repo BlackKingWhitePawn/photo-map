@@ -1,52 +1,54 @@
-# Branch `release-0-11-0`
+# Branch `release-1-0-0`
 
 ## Release Target
 
 ```text
-v0.11.0
+v1.0.0
 ```
 
 ## Task
 
-Implement the new home screen described in `mainPage.md`.
+Prepare the first stable Traverse release after the home widget, trip export, settings, and map control polish.
 
-The home screen becomes the app start screen and shows the user's local photo geography through:
+The branch packages the current app state with:
 
-* a compact trip heatmap preview;
-* a featured trips carousel;
-* popular places cards;
-* an "On this day in the past" section;
-* reusable mini-gallery components for shared thumbnail rows.
+* real trip heatmap rendering in the home gallery geography widget;
+* hidden political borders and country labels in the compact home map preview;
+* trip export images backed by the first trip photo;
+* simplified settings without algorithm/debug controls;
+* updated map bottom controls with a segmented heatmap/photo switch;
+* visible product naming changed to Traverse;
+* Android metadata for `v1.0.0`.
 
 ## Scope
 
 Included:
 
-* `home` navigation route as the start destination;
-* all-places and place-details routes;
-* home heatmap preview using existing ready trip heat cells;
-* trip cards built from existing `TripMapMarker` data;
-* popular place cards built from already indexed photos with coordinates;
-* mini-galleries grouped by day on the place details screen;
-* reusable `MiniPhotoGallery` and `MiniPhotoThumbnail`;
-* Android metadata and release docs for `v0.11.0`.
+* release branch `release-1-0-0`;
+* Android metadata bump to `versionName=1.0.0`, `versionCode=19`;
+* visible app name changed to `Traverse`;
+* changelog entry for `v1.0.0`;
+* release notes for `v1.0.0`;
+* prepared APK asset `app/release/traverse-v1.0.0.apk`;
+* updated PR and branch documentation.
 
 Not included:
 
-* a persisted places table;
-* manual place editing;
-* network geocoding for place cards;
-* new analytics, server sync, or photo write operations.
+* signed release APK build;
+* Play Console upload;
+* tag creation;
+* remote push;
+* package/class namespace rename from `photomap`/`PhotoMap`.
 
 ## Acceptance Criteria
 
-* App opens to the home screen after permissions are available.
-* Home screen scrolls vertically and uses lazy sections.
-* Top map preview renders the existing trip heatmap data and does not run trip detection or H3 aggregation.
-* Embedded map previews do not interfere with vertical scrolling.
-* Trip cards open trip details and "All trips" opens the trip map.
-* Place cards open a place detail screen with grouped mini-galleries.
-* The mini-gallery is reusable outside the home feature.
-* Full photo map, trip map, settings, and permission flows remain reachable.
-* Original user photos remain read-only.
-* Codex does not run Gradle build, tests, lint, `npx`, `tsc`, or `eslint`.
+* App metadata reports `versionName=1.0.0` and `versionCode=19`.
+* Visible app branding says `Traverse`.
+* `CHANGELOG.md` contains a dated `1.0.0` section.
+* `release-notes/v1.0.0.md` exists and records APK metadata status inside `Version`.
+* Release APK asset is available as `app/release/traverse-v1.0.0.apk`.
+* Home widget uses real trip heatmap data without country borders or country labels.
+* Trip share export uses the first trip photo as its background and omits confidence.
+* Settings do not expose algorithm tuning, debug controls, or diagnostic log export.
+* Bottom map controls use spaced layout with same-height date and display-mode controls.
+* Codex does not run tests, `npx`, `tsc`, or `eslint`.

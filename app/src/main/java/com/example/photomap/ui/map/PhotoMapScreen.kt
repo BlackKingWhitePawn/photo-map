@@ -38,10 +38,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
@@ -56,13 +59,11 @@ import androidx.compose.foundation.pager.PagerSnapDistance
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RangeSlider
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,6 +80,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -95,9 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.example.photomap.core.settings.MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
-import com.example.photomap.core.settings.MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
-import com.example.photomap.core.settings.PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
+import com.example.photomap.R
 import com.example.photomap.core.settings.PhotoClusterSettings
 import com.example.photomap.core.util.AppDiagnostics
 import com.example.photomap.data.cluster.PhotoMapBounds
@@ -291,7 +291,7 @@ private fun MapTopBar(
                         onClick = onOpenSettings
                     ) {
                         Icon(
-                            painter = painterResource(id = android.R.drawable.ic_menu_manage),
+                            painter = painterResource(id = R.drawable.ic_settings_gear),
                             contentDescription = "Настройки",
                             modifier = Modifier.size(22.dp)
                         )
@@ -1379,55 +1379,27 @@ private fun MapFabControls(
     Box(
         modifier = modifier,
         contentAlignment = Alignment.CenterEnd
-    ) {
+    )
+    {
         AnimatedVisibility(
             visible = expandedPanel == null,
             enter = fadeIn(),
             exit = fadeOut()
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 MapDisplayModeToggle(
                     displayMode = displayMode,
-                    onToggle = {
-                        onDisplayModeChanged(
-                            if (displayMode == PhotoMapDisplayMode.Heatmap) {
-                                PhotoMapDisplayMode.Photos
-                            } else {
-                                PhotoMapDisplayMode.Heatmap
-                            }
-                        )
-                    }
+                    onModeSelected = onDisplayModeChanged
                 )
-                FloatingActionButton(
-                    containerColor = if (dateFilter.isActive) {
-                        MaterialTheme.colorScheme.tertiaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.primaryContainer
-                    },
-                    contentColor = if (dateFilter.isActive) {
-                        MaterialTheme.colorScheme.onTertiaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    },
+                MapDateFilterButton(
+                    dateFilter = dateFilter,
+                    label = compactDateFilterLabel(context, dateFilter),
                     onClick = { expandedPanel = MapFabPanel.DateFilter }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(id = android.R.drawable.ic_menu_recent_history),
-                            contentDescription = "Фильтр по дате",
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Text(
-                            text = compactDateFilterLabel(context, dateFilter),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
+                )
             }
         }
         AnimatedVisibility(
@@ -1456,20 +1428,97 @@ private fun MapFabControls(
 @Composable
 private fun MapDisplayModeToggle(
     displayMode: PhotoMapDisplayMode,
-    onToggle: () -> Unit
+    onModeSelected: (PhotoMapDisplayMode) -> Unit
 ) {
-    val isHeatmap = displayMode == PhotoMapDisplayMode.Heatmap
     Surface(
         modifier = Modifier
-            .size(44.dp)
-            .clickable(onClick = onToggle),
-        shape = CircleShape,
-        color = if (isHeatmap) {
+            .width(MapModeToggleWidth)
+            .height(MapBottomControlHeight),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 6.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            MapDisplayModeSegment(
+                mode = PhotoMapDisplayMode.Heatmap,
+                selected = displayMode == PhotoMapDisplayMode.Heatmap,
+                iconResId = android.R.drawable.ic_dialog_map,
+                contentDescription = "Heatmap",
+                onModeSelected = onModeSelected,
+                modifier = Modifier.weight(1f)
+            )
+            MapDisplayModeSegment(
+                mode = PhotoMapDisplayMode.Photos,
+                selected = displayMode == PhotoMapDisplayMode.Photos,
+                iconResId = android.R.drawable.ic_menu_gallery,
+                contentDescription = "Фото",
+                onModeSelected = onModeSelected,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MapDisplayModeSegment(
+    mode: PhotoMapDisplayMode,
+    selected: Boolean,
+    iconResId: Int,
+    contentDescription: String,
+    onModeSelected: (PhotoMapDisplayMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxSize()
+            .clickable { onModeSelected(mode) },
+        shape = RoundedCornerShape(13.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.tertiaryContainer
+        } else {
+            Color.Transparent
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onTertiaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                painter = painterResource(id = iconResId),
+                contentDescription = contentDescription,
+                modifier = Modifier.size(19.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MapDateFilterButton(
+    dateFilter: PhotoDateFilter,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .height(MapBottomControlHeight)
+            .widthIn(min = MapDateButtonMinWidth, max = MapDateButtonMaxWidth)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (dateFilter.isActive) {
             MaterialTheme.colorScheme.tertiaryContainer
         } else {
             MaterialTheme.colorScheme.primaryContainer
         },
-        contentColor = if (isHeatmap) {
+        contentColor = if (dateFilter.isActive) {
             MaterialTheme.colorScheme.onTertiaryContainer
         } else {
             MaterialTheme.colorScheme.onPrimaryContainer
@@ -1477,11 +1526,25 @@ private fun MapDisplayModeToggle(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         tonalElevation = 6.dp
     ) {
-        Box(contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                painter = painterResource(id = android.R.drawable.ic_menu_recent_history),
+                contentDescription = "Фильтр по дате",
+                modifier = Modifier.size(19.dp)
+            )
             Text(
-                text = if (isHeatmap) "H" else "P",
+                modifier = Modifier.weight(1f),
+                text = label,
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -2113,122 +2176,6 @@ private fun datePickerLocalMillisForDateFilterDay(day: Long, locale: Locale): Lo
             0
         )
     }.timeInMillis
-}
-
-@Composable
-private fun ClusterDensityFabControl(
-    clusterSettings: PhotoClusterSettings,
-    onDensityChanged: (Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var isExpanded by remember { mutableStateOf(false) }
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.CenterEnd
-    ) {
-        AnimatedVisibility(
-            visible = !isExpanded,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            FloatingActionButton(onClick = { isExpanded = true }) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_sort_by_size),
-                        contentDescription = "Плотность кластеров",
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "${clusterSettings.densityCoefficientPercent}%",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-        AnimatedVisibility(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxWidth(),
-            visible = isExpanded,
-            enter = expandHorizontally(expandFrom = Alignment.End) + fadeIn(),
-            exit = shrinkHorizontally(shrinkTowards = Alignment.End) + fadeOut()
-        ) {
-            ClusterDensitySlider(
-                modifier = Modifier.fillMaxWidth(),
-                clusterSettings = clusterSettings,
-                onDensityChanged = onDensityChanged,
-                onClose = { isExpanded = false }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ClusterDensitySlider(
-    clusterSettings: PhotoClusterSettings,
-    onDensityChanged: (Int) -> Unit,
-    onClose: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var sliderValue by remember {
-        mutableStateOf(clusterSettings.densityCoefficientPercent.toFloat())
-    }
-    var lastSentValue by remember {
-        mutableStateOf(clusterSettings.densityCoefficientPercent)
-    }
-    LaunchedEffect(clusterSettings.densityCoefficientPercent) {
-        sliderValue = clusterSettings.densityCoefficientPercent.toFloat()
-        lastSentValue = clusterSettings.densityCoefficientPercent
-    }
-    val densityRangeStart = MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT.toFloat()
-    val densityRangeEnd = MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT.toFloat()
-    val densityRange = densityRangeStart..densityRangeEnd
-    val sliderSteps = (
-        (MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT - MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT) /
-            PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
-        ).coerceAtLeast(1) - 1
-
-    Card(modifier = modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, top = 8.dp, end = 6.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Slider(
-                modifier = Modifier.weight(1f),
-                value = sliderValue.coerceIn(densityRangeStart, densityRangeEnd),
-                onValueChange = { value ->
-                    sliderValue = value
-                },
-                onValueChangeFinished = {
-                    val nextValue = sliderValue.roundToDensityStep()
-                    if (nextValue != lastSentValue) {
-                        lastSentValue = nextValue
-                        onDensityChanged(nextValue)
-                    }
-                },
-                valueRange = densityRange,
-                steps = sliderSteps
-            )
-            IconButton(
-                modifier = Modifier.size(40.dp),
-                onClick = onClose
-            ) {
-                Icon(
-                    painter = painterResource(id = android.R.drawable.ic_menu_close_clear_cancel),
-                    contentDescription = "Скрыть плотность",
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
-    }
 }
 
 @Composable
@@ -2942,7 +2889,7 @@ private suspend fun MapLibreMap.buildPhotoMapRenderState(
         if (error is CancellationException) {
             throw error
         }
-        Log.w(PhotoMapLogTag, "Failed to build photo map render state", error)
+        Log.w(PhotoMapLogTag, "Failed to build Traverse render state", error)
     }.getOrDefault(PhotoMapRenderState.Empty)
 }
 
@@ -4070,15 +4017,6 @@ private fun Context.dateFilterLocale(): Locale {
     }
 }
 
-private fun Float.roundToDensityStep(): Int {
-    val step = PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT_STEP
-    return ((this / step).roundToInt() * step)
-        .coerceIn(
-            MIN_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT,
-            MAX_PHOTO_CLUSTER_DENSITY_COEFFICIENT_PERCENT
-        )
-}
-
 private fun emptyPhotoFeatureCollection(): FeatureCollection {
     return FeatureCollection.fromFeatures(emptyList<Feature>())
 }
@@ -4203,6 +4141,10 @@ private const val DateSliderShowEveryMonthMaxDays = 730L
 private const val DateSliderShowQuarterMaxDays = 1460L
 private const val DateSliderShowHalfYearMaxDays = 2920L
 private const val DateFabFallbackLabel = "\u0414\u0430\u0442\u0430"
+private val MapBottomControlHeight = 48.dp
+private val MapModeToggleWidth = 108.dp
+private val MapDateButtonMinWidth = 132.dp
+private val MapDateButtonMaxWidth = 212.dp
 private const val CityWideClusterZoom = 11.0
 private const val DistrictClusterZoom = 12.5
 private const val NeighborhoodClusterZoom = 14.0

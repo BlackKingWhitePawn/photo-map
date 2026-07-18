@@ -119,9 +119,18 @@ fun PhotoMapApp(
     val mapPhotos = remember(photos, state.dateFilter) {
         photos.filter { photo -> photo.matchesPhotoDateFilter(state.dateFilter) }
     }
-    val homePlaces by produceState(initialValue = emptyList<HomePlaceCardUiModel>(), photos) {
+    val homePlaces by produceState(
+        initialValue = emptyList<HomePlaceCardUiModel>(),
+        photos,
+        state.tripMarkers,
+        state.tripPhotoIdsByTripId
+    ) {
         value = withContext(Dispatchers.Default) {
-            buildHomePlaceModels(photos)
+            buildHomePlaceModels(
+                photos = photos,
+                trips = state.tripMarkers,
+                tripPhotoIdsByTripId = state.tripPhotoIdsByTripId
+            )
         }
     }
 
@@ -196,8 +205,13 @@ fun PhotoMapApp(
         ) { entry ->
             val placeId = entry.arguments?.getString(Routes.PlaceIdArgument).orEmpty()
             val place = homePlaces.firstOrNull { homePlace -> homePlace.id == placeId }
-            val placePhotos = remember(photos, placeId) {
-                photosForHomePlace(photos, placeId)
+            val placePhotos = remember(photos, state.tripMarkers, state.tripPhotoIdsByTripId, placeId) {
+                photosForHomePlace(
+                    photos = photos,
+                    placeId = placeId,
+                    trips = state.tripMarkers,
+                    tripPhotoIdsByTripId = state.tripPhotoIdsByTripId
+                )
             }
             PlaceDetailsScreen(
                 place = place?.copy(photos = placePhotos),

@@ -68,7 +68,11 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.ln
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class HomeSectionHeights(
     val heatmapHeight: Dp,
@@ -264,9 +268,36 @@ fun PlaceDetailsScreen(
 
 fun buildHomePlaceModels(
     photos: List<DevicePhoto>,
+    trips: List<TripMapMarker> = emptyList(),
+    tripPhotoIdsByTripId: Map<Long, List<Long>> = emptyMap(),
     maxPlaces: Int = MaxHomePlaceModels,
     maxPreviewPhotosPerPlace: Int = MaxHomePlacePreviewPhotos
 ): List<HomePlaceCardUiModel> {
+    val scoredPlaces = buildSeedHomePlaceCandidates(
+        photos = photos,
+        maxPreviewPhotosPerPlace = maxPreviewPhotosPerPlace
+    ) + buildTripHomePlaceCandidates(
+        photos = photos,
+        trips = trips,
+        tripPhotoIdsByTripId = tripPhotoIdsByTripId,
+        maxPreviewPhotosPerPlace = maxPreviewPhotosPerPlace
+    )
+
+    return scoredPlaces
+        .sortedWith(
+            compareByDescending<HomeScoredPlace> { scoredPlace -> scoredPlace.score }
+                .thenByDescending { scoredPlace -> scoredPlace.place.latestAt ?: 0L }
+                .thenBy { scoredPlace -> scoredPlace.place.title }
+        )
+        .hierarchyAware(maxPlaces)
+        .map { scoredPlace -> scoredPlace.place }
+        .take(maxPlaces)
+}
+
+private fun buildSeedHomePlaceCandidates(
+    photos: List<DevicePhoto>,
+    maxPreviewPhotosPerPlace: Int
+): List<HomeScoredPlace> {
     val photosByGeoObject = linkedMapOf<String, MutableList<DevicePhoto>>()
     val geoObjectsById = linkedMapOf<String, HomeGeoObjectMatch>()
     photos.forEach { photo ->
@@ -276,62 +307,169 @@ fun buildHomePlaceModels(
         }
     }
 
-    return photosByGeoObject
-        .mapNotNull { (id, groupedPhotos) ->
-            val geoObject = geoObjectsById[id] ?: return@mapNotNull null
-            val validPhotos = groupedPhotos
-                .distinctBy { photo -> photo.mediaId }
-                .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
-            if (validPhotos.isEmpty()) {
-                return@mapNotNull null
+    return photosByGeoObject.mapNotNull { (id, groupedPhotos) ->
+        val geoObject = geoObjectsById[id] ?: return@mapNotNull null
+        val validPhotos = groupedPhotos
+            .distinctBy { photo -> photo.mediaId }
+            .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+        if (validPhotos.isEmpty()) {
+            return@mapNotNull null
+        }
+
+        val activeDays = validPhotos.activeDayCount()
+        val sessionCount = validPhotos.placeSessionCount(geoObject.facet)
+        val activeMonths = validPhotos.activeMonthCount()
+        val tripCount = validPhotos.tripLikeVisitCount()
+        val score = placeScore(
+            photoCount = validPhotos.size,
+            sessionCount = sessionCount,
+            activeDays = activeDays,
+            activeMonths = activeMonths,
+            tripCount = tripCount,
+            importance = geoObject.importance
+        )
+        HomeScoredPlace(
+            place = HomePlaceCardUiModel(
+                id = id,
+                title = geoObject.name,
+                latitude = geoObject.centerLatitude,
+                longitude = geoObject.centerLongitude,
+                visitCount = sessionCount.coerceAtLeast(activeDays),
+                photoCount = validPhotos.size,
+                latestAt = validPhotos.firstOrNull()?.photoDateMillis(),
+                coverPhoto = validPhotos.firstOrNull(),
+                photos = validPhotos.take(maxPreviewPhotosPerPlace)
+            ),
+            photoIds = validPhotos.map { photo -> photo.mediaId }.toSet(),
+            score = score,
+            facet = geoObject.facet
+        )
+    }
+}
+
+private fun buildTripHomePlaceCandidates(
+    photos: List<DevicePhoto>,
+    trips: List<TripMapMarker>,
+    tripPhotoIdsByTripId: Map<Long, List<Long>>,
+    maxPreviewPhotosPerPlace: Int
+): List<HomeScoredPlace> {
+    if (photos.isEmpty() || trips.isEmpty()) {
+        return emptyList()
+    }
+
+    val photosById = photos.associateBy { photo -> photo.mediaId }
+    val groups = linkedMapOf<String, MutableTripHomePlace>()
+    trips
+        .sortedWith(compareByDescending<TripMapMarker> { marker -> marker.endDay }.thenByDescending { it.photoCount })
+        .forEach { marker ->
+            val tripPhotos = photosForTripPlaceMarker(
+                photos = photos,
+                photosById = photosById,
+                marker = marker,
+                orderedPhotoIds = tripPhotoIdsByTripId[marker.tripId]
+            )
+            if (tripPhotos.isEmpty()) {
+                return@forEach
             }
 
-            val activeDays = validPhotos.activeDayCount()
-            val sessionCount = validPhotos.placeSessionCount(geoObject.facet)
-            val activeMonths = validPhotos.activeMonthCount()
-            val tripCount = validPhotos.tripLikeVisitCount()
-            val score = placeScore(
-                photoCount = validPhotos.size,
-                sessionCount = sessionCount,
-                activeDays = activeDays,
-                activeMonths = activeMonths,
-                tripCount = tripCount,
-                importance = geoObject.importance
-            )
-            HomeScoredPlace(
-                place = HomePlaceCardUiModel(
-                    id = id,
-                    title = geoObject.name,
-                    latitude = geoObject.centerLatitude,
-                    longitude = geoObject.centerLongitude,
-                    visitCount = sessionCount.coerceAtLeast(activeDays),
-                    photoCount = validPhotos.size,
-                    latestAt = validPhotos.firstOrNull()?.photoDateMillis(),
-                    coverPhoto = validPhotos.firstOrNull(),
-                    photos = validPhotos.take(maxPreviewPhotosPerPlace)
-                ),
-                photoIds = validPhotos.map { photo -> photo.mediaId }.toSet(),
-                score = score,
-                facet = geoObject.facet
-            )
+            val placeId = marker.tripPlaceId()
+            groups
+                .getOrPut(placeId) {
+                    MutableTripHomePlace(
+                        id = placeId,
+                        title = marker.tripPlaceTitle()
+                    )
+                }
+                .add(marker = marker, photos = tripPhotos)
         }
-        .sortedWith(
-            compareByDescending<HomeScoredPlace> { scoredPlace -> scoredPlace.score }
-                .thenByDescending { scoredPlace -> scoredPlace.place.latestAt ?: 0L }
-                .thenBy { scoredPlace -> scoredPlace.place.title }
-        )
-        .hierarchyAware()
-        .map { scoredPlace -> scoredPlace.place }
-        .take(maxPlaces)
+
+    return groups.values.mapNotNull { group ->
+        group.toScoredPlace(maxPreviewPhotosPerPlace)
+    }
 }
 
 fun photosForHomePlace(
     photos: List<DevicePhoto>,
-    placeId: String
+    placeId: String,
+    trips: List<TripMapMarker> = emptyList(),
+    tripPhotoIdsByTripId: Map<Long, List<Long>> = emptyMap()
 ): List<DevicePhoto> {
+    if (placeId.isTripHomePlaceId()) {
+        return photosForTripHomePlace(
+            photos = photos,
+            placeId = placeId,
+            trips = trips,
+            tripPhotoIdsByTripId = tripPhotoIdsByTripId
+        )
+    }
+
     return photos
         .asSequence()
         .filter { photo -> photo.homeGeoObjectMatches().any { geoObject -> geoObject.id == placeId } }
+        .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+        .toList()
+}
+
+private fun photosForTripHomePlace(
+    photos: List<DevicePhoto>,
+    placeId: String,
+    trips: List<TripMapMarker>,
+    tripPhotoIdsByTripId: Map<Long, List<Long>>
+): List<DevicePhoto> {
+    if (photos.isEmpty() || trips.isEmpty()) {
+        return emptyList()
+    }
+
+    val photosById = photos.associateBy { photo -> photo.mediaId }
+    return trips
+        .asSequence()
+        .filter { marker -> marker.tripPlaceId() == placeId }
+        .flatMap { marker ->
+            photosForTripPlaceMarker(
+                photos = photos,
+                photosById = photosById,
+                marker = marker,
+                orderedPhotoIds = tripPhotoIdsByTripId[marker.tripId]
+            ).asSequence()
+        }
+        .distinctBy { photo -> photo.mediaId }
+        .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+        .toList()
+}
+
+private fun photosForTripPlaceMarker(
+    photos: List<DevicePhoto>,
+    photosById: Map<Long, DevicePhoto>,
+    marker: TripMapMarker,
+    orderedPhotoIds: List<Long>?
+): List<DevicePhoto> {
+    val linkedPhotos = orderedPhotoIds
+        .orEmpty()
+        .mapNotNull { photoId -> photosById[photoId] }
+    if (linkedPhotos.isNotEmpty()) {
+        return linkedPhotos
+            .distinctBy { photo -> photo.mediaId }
+            .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+    }
+
+    val radiusKm = (marker.radiusKm ?: TripPlaceFallbackRadiusKm)
+        .coerceIn(MinTripPlaceFallbackRadiusKm, MaxTripPlaceFallbackRadiusKm) + TripPlaceFallbackPaddingKm
+    return photos
+        .asSequence()
+        .filter { photo -> photo.hasLocation }
+        .filter { photo ->
+            val day = photo.homePhotoDay() ?: return@filter false
+            day in marker.startDay..marker.endDay
+        }
+        .filter { photo ->
+            haversineKm(
+                firstLatitude = requireNotNull(photo.latitude),
+                firstLongitude = requireNotNull(photo.longitude),
+                secondLatitude = marker.latitude,
+                secondLongitude = marker.longitude
+            ) <= radiusKm
+        }
+        .distinctBy { photo -> photo.mediaId }
         .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
         .toList()
 }
@@ -1150,7 +1288,7 @@ private fun HomeMemoryPreview(points: List<OnThisDayMapPoint>) {
 
 private fun List<DevicePhoto>.activeDayCount(): Int {
     return mapNotNull { photo ->
-        photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
+        photo.homePhotoDay()
     }.toSet().size.coerceAtLeast(1)
 }
 
@@ -1195,7 +1333,7 @@ private fun List<DevicePhoto>.placeSessionCount(facet: PlaceFacet): Int {
 
 private fun List<DevicePhoto>.tripLikeVisitCount(): Int {
     val days = mapNotNull { photo ->
-        photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
+        photo.homePhotoDay()
     }.distinct().sorted()
     if (days.isEmpty()) {
         return 1
@@ -1210,6 +1348,10 @@ private fun List<DevicePhoto>.tripLikeVisitCount(): Int {
         previous = day
     }
     return visits
+}
+
+private fun DevicePhoto.homePhotoDay(): Long? {
+    return photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
 }
 
 private fun placeScore(
@@ -1230,10 +1372,10 @@ private fun placeScore(
             )
 }
 
-private fun List<HomeScoredPlace>.hierarchyAware(): List<HomeScoredPlace> {
+private fun List<HomeScoredPlace>.hierarchyAware(maxPlaces: Int = MaxHomePlaceModels): List<HomeScoredPlace> {
     val remaining = toMutableList()
     val selected = mutableListOf<HomeScoredPlace>()
-    while (remaining.isNotEmpty() && selected.size < MaxHomePlaceModels) {
+    while (remaining.isNotEmpty() && selected.size < maxPlaces) {
         val next = remaining.maxBy { candidate -> candidate.displayScoreAfter(selected) }
         selected += next
         remaining -= next
@@ -1263,6 +1405,61 @@ private fun Set<Long>.overlapWith(other: Set<Long>): Double {
         return 0.0
     }
     return count { id -> id in other }.toDouble() / baseSize.toDouble()
+}
+
+private fun TripMapMarker.tripPlaceId(): String {
+    val title = placeName?.cleanPlaceTitle()?.takeIf { value -> value.isNotEmpty() }
+    return if (title != null) {
+        TripPlaceNameIdPrefix + title.lowercase(Locale.US).stablePlaceHash()
+    } else {
+        TripPlaceTripIdPrefix + tripId
+    }
+}
+
+private fun TripMapMarker.tripPlaceTitle(): String {
+    return placeName
+        ?.cleanPlaceTitle()
+        ?.takeIf { value -> value.isNotEmpty() }
+        ?: formatTripCoordinates(latitude = latitude, longitude = longitude)
+}
+
+private fun String.cleanPlaceTitle(): String {
+    return trim().replace(WhitespaceRegex, " ")
+}
+
+private fun String.stablePlaceHash(): String {
+    val hash = hashCode().toLong()
+    val positiveHash = if (hash < 0) -hash else hash
+    return positiveHash.toString(Character.MAX_RADIX)
+}
+
+private fun String.isTripHomePlaceId(): Boolean {
+    return startsWith(TripPlaceNameIdPrefix) || startsWith(TripPlaceTripIdPrefix)
+}
+
+private fun formatTripCoordinates(latitude: Double, longitude: Double): String {
+    return String.format(Locale.US, "%.3f, %.3f", latitude, longitude)
+}
+
+private fun haversineKm(
+    firstLatitude: Double,
+    firstLongitude: Double,
+    secondLatitude: Double,
+    secondLongitude: Double
+): Double {
+    val firstLatitudeRad = Math.toRadians(firstLatitude)
+    val secondLatitudeRad = Math.toRadians(secondLatitude)
+    val deltaLatitudeRad = Math.toRadians(secondLatitude - firstLatitude)
+    val deltaLongitudeRad = Math.toRadians(secondLongitude - firstLongitude)
+    val halfChord = sin(deltaLatitudeRad / 2.0) * sin(deltaLatitudeRad / 2.0) +
+        cos(firstLatitudeRad) * cos(secondLatitudeRad) *
+        sin(deltaLongitudeRad / 2.0) * sin(deltaLongitudeRad / 2.0)
+    val normalizedHalfChord = halfChord.coerceIn(0.0, 1.0)
+    val angularDistance = 2.0 * atan2(
+        sqrt(normalizedHalfChord),
+        sqrt(1.0 - normalizedHalfChord)
+    )
+    return EarthRadiusKm * angularDistance
 }
 
 private fun emptyOnThisDayUiState(): OnThisDayUiState {
@@ -1393,6 +1590,73 @@ private data class HomeScoredPlace(
     val facet: PlaceFacet
 )
 
+private class MutableTripHomePlace(
+    val id: String,
+    val title: String
+) {
+    private val markers = mutableListOf<TripMapMarker>()
+    private val photosById = linkedMapOf<Long, DevicePhoto>()
+
+    fun add(marker: TripMapMarker, photos: List<DevicePhoto>) {
+        markers += marker
+        photos.forEach { photo -> photosById[photo.mediaId] = photo }
+    }
+
+    fun toScoredPlace(maxPreviewPhotosPerPlace: Int): HomeScoredPlace? {
+        val validPhotos = photosById.values
+            .distinctBy { photo -> photo.mediaId }
+            .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+        if (validPhotos.isEmpty() || markers.isEmpty()) {
+            return null
+        }
+
+        val totalWeight = markers
+            .sumOf { marker -> marker.photoCount.coerceAtLeast(1) }
+            .coerceAtLeast(1)
+        val latitude = markers.sumOf { marker ->
+            marker.latitude * marker.photoCount.coerceAtLeast(1)
+        } / totalWeight.toDouble()
+        val longitude = markers.sumOf { marker ->
+            marker.longitude * marker.photoCount.coerceAtLeast(1)
+        } / totalWeight.toDouble()
+        val activeDays = validPhotos.activeDayCount()
+        val activeMonths = validPhotos.activeMonthCount()
+        val tripCount = markers.size.coerceAtLeast(validPhotos.tripLikeVisitCount())
+        val sessionCount = validPhotos.placeSessionCount(PlaceFacet.City).coerceAtLeast(tripCount)
+        val averageConfidence = markers.map { marker -> marker.confidence }.average()
+        val importance = (
+            0.95 +
+                averageConfidence.coerceIn(0.0, 1.0) * 0.3 +
+                ln(1.0 + tripCount) * 0.08
+            ).coerceIn(0.75, 1.35)
+        val score = placeScore(
+            photoCount = validPhotos.size,
+            sessionCount = sessionCount,
+            activeDays = activeDays,
+            activeMonths = activeMonths,
+            tripCount = tripCount,
+            importance = importance
+        )
+
+        return HomeScoredPlace(
+            place = HomePlaceCardUiModel(
+                id = id,
+                title = title,
+                latitude = latitude,
+                longitude = longitude,
+                visitCount = sessionCount.coerceAtLeast(activeDays),
+                photoCount = validPhotos.size,
+                latestAt = validPhotos.firstOrNull()?.photoDateMillis(),
+                coverPhoto = validPhotos.firstOrNull(),
+                photos = validPhotos.take(maxPreviewPhotosPerPlace)
+            ),
+            photoIds = validPhotos.map { photo -> photo.mediaId }.toSet(),
+            score = score,
+            facet = PlaceFacet.City
+        )
+    }
+}
+
 private data class HomePreviewPoint(
     val latitude: Double,
     val longitude: Double,
@@ -1414,3 +1678,11 @@ private const val MaxHomePreviewMemoryPoints = 80
 private const val HomeCarouselCardWidthFraction = 0.54f
 private const val TripLikeVisitGapDays = 3L
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
+private const val EarthRadiusKm = 6371.0
+private const val TripPlaceFallbackRadiusKm = 35.0
+private const val MinTripPlaceFallbackRadiusKm = 15.0
+private const val MaxTripPlaceFallbackRadiusKm = 80.0
+private const val TripPlaceFallbackPaddingKm = 10.0
+private const val TripPlaceNameIdPrefix = "trip-place-name-"
+private const val TripPlaceTripIdPrefix = "trip-place-trip-"
+private val WhitespaceRegex = Regex("\\s+")

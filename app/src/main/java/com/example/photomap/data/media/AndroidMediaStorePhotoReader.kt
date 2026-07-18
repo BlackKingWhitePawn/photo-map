@@ -41,11 +41,14 @@ class AndroidMediaStorePhotoReader(
         val photosToPersist = mutableListOf<IndexedPhoto>()
         val currentMediaIds = mutableSetOf<Long>()
         val cachedPhotos = photoIndexDatabase.getAllPhotosById()
+        val indexedPhotosById = LinkedHashMap(cachedPhotos)
         val startIndexStats = photoIndexDatabase.getStats()
         val canReadOriginalLocation = readExifLocation &&
             PhotoPermissionManager.checkStatus(appContext).canReadOriginalLocation
         var currentLocationScannedCount = startIndexStats.locationScannedCount
         var lastProgressReportAt = 0L
+        var lastResumeStateSaveAt = 0L
+        var lastProcessedMediaId: Long? = null
         var processed = 0
         var total = 0
 
@@ -64,6 +67,25 @@ class AndroidMediaStorePhotoReader(
             }
         }
 
+        fun saveExifResumeStateIfNeeded(force: Boolean = false) {
+            if (!readExifLocation || processed <= 0 || total <= 0) {
+                return
+            }
+
+            val mediaId = lastProcessedMediaId ?: return
+            val now = SystemClock.elapsedRealtime()
+            if (!force && now - lastResumeStateSaveAt < ExifResumeSaveIntervalMs) {
+                return
+            }
+
+            saveExifScanResumeState(
+                processed = processed,
+                total = total,
+                lastMediaId = mediaId
+            )
+            lastResumeStateSaveAt = now
+        }
+
         fun persistBatch() {
             if (photosToPersist.isEmpty()) {
                 return
@@ -72,13 +94,7 @@ class AndroidMediaStorePhotoReader(
             val indexedBatch = photosToPersist.toList()
             photoIndexDatabase.upsertPhotos(indexedBatch)
             photosToPersist.clear()
-            if (readExifLocation) {
-                saveExifScanResumeState(
-                    processed = processed,
-                    total = total,
-                    lastMediaId = indexedBatch.lastOrNull()?.mediaId
-                )
-            }
+            saveExifResumeStateIfNeeded(force = true)
             onBatchIndexed(indexedBatch.map { photo -> photo.toDevicePhoto() })
         }
 
@@ -116,22 +132,29 @@ class AndroidMediaStorePhotoReader(
                         readExifLocation = readExifLocation,
                         canReadOriginalLocation = canReadOriginalLocation
                     )
-                    photosToPersist += indexedPhoto
                     processed += 1
+                    lastProcessedMediaId = currentPhoto.mediaId
 
                     if (indexedPhoto.locationScanned && cachedPhoto?.locationScanned != true) {
                         currentLocationScannedCount += 1
+                    }
+                    indexedPhotosById[currentPhoto.mediaId] = indexedPhoto
+
+                    if (cachedPhoto == null || !cachedPhoto.hasSameIndexedContent(indexedPhoto)) {
+                        photosToPersist += indexedPhoto
                     }
 
                     if (photosToPersist.size >= PersistBatchSize) {
                         persistBatch()
                     }
 
+                    saveExifResumeStateIfNeeded(force = processed == total)
                     reportProgress(processed = processed, total = total, force = processed == total)
                 }
 
                 persistBatch()
                 photoIndexDatabase.deleteMissingPhotos(currentMediaIds)
+                indexedPhotosById.keys.removeAll { mediaId -> mediaId !in currentMediaIds }
                 if (readExifLocation) {
                     clearExifScanResumeState()
                 }
@@ -147,7 +170,7 @@ class AndroidMediaStorePhotoReader(
             Log.w(Tag, "Unable to read images from MediaStore", exception)
         }
 
-        val indexedPhotos = photoIndexDatabase.getAllPhotosById()
+        val indexedPhotos = indexedPhotosById
             .values
             .map { photo -> photo.toDevicePhoto() }
             .sortedByNewestFirst()
@@ -347,7 +370,25 @@ class AndroidMediaStorePhotoReader(
 
         const val PersistBatchSize = 50
         const val ProgressReportIntervalMs = 100L
+        const val ExifResumeSaveIntervalMs = 2_500L
     }
+}
+
+private fun IndexedPhoto.hasSameIndexedContent(other: IndexedPhoto): Boolean {
+    return mediaId == other.mediaId &&
+        uri == other.uri &&
+        displayName == other.displayName &&
+        mimeType == other.mimeType &&
+        dateAdded == other.dateAdded &&
+        dateModified == other.dateModified &&
+        dateTaken == other.dateTaken &&
+        width == other.width &&
+        height == other.height &&
+        size == other.size &&
+        orientation == other.orientation &&
+        latitude == other.latitude &&
+        longitude == other.longitude &&
+        locationScanned == other.locationScanned
 }
 
 private data class ExifScanResumeState(

@@ -471,7 +471,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
             }
             heatmapContent?.let { loadedHeatmap ->
                 loadedTripHeatBounds = loadedHeatmap.loadedBounds
-                loadedTripHeatResolution = loadedHeatmap.resolution
+                loadedTripHeatResolution = requestedHeatResolution
             }
             _uiState.update { state ->
                 state.copy(
@@ -506,7 +506,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 return@launch
             }
             loadedTripHeatBounds = heatmapContent.loadedBounds
-            loadedTripHeatResolution = heatmapContent.resolution
+            loadedTripHeatResolution = requestedHeatResolution
             _uiState.update { state ->
                 state.copy(
                     visibleTripHeatCells = heatmapContent.cells,
@@ -681,7 +681,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
                 loadedClusterBounds = content.loadedBounds
                 loadedClusterLevel = content.level
                 loadedTripHeatBounds = heatmapContent.loadedBounds
-                loadedTripHeatResolution = heatmapContent.resolution
+                loadedTripHeatResolution = heatResolutionForZoom(zoom)
                 _uiState.update { state ->
                     state.copy(
                         visibleMapItems = content.items,
@@ -709,7 +709,7 @@ class PhotoAccessViewModel(application: Application) : AndroidViewModel(applicat
             zoom = zoom
         ).also { content ->
             loadedTripHeatBounds = content.loadedBounds
-            loadedTripHeatResolution = content.resolution
+            loadedTripHeatResolution = heatResolutionForZoom(zoom)
         }
     }
 

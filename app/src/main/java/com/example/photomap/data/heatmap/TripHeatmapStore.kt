@@ -19,8 +19,12 @@ class TripHeatmapStore(
         bounds: PhotoMapBounds,
         zoom: Double
     ): VisibleTripHeatmapContent = withContext(ioDispatcher) {
-        val resolution = heatResolutionForZoom(zoom)
+        val requestedResolution = heatResolutionForZoom(zoom)
         val expandedBounds = bounds.expanded(ViewportPaddingFactor)
+        val resolution = selectVisibleResolution(
+            requestedResolution = requestedResolution,
+            bounds = expandedBounds
+        )
         val cells = database.getVisibleTripHeatCells(
             resolution = resolution,
             bounds = expandedBounds
@@ -30,7 +34,7 @@ class TripHeatmapStore(
         val visibleCells = cells.map { cell ->
             cell.toVisibleTripHeatCell(maxIntensity)
         }
-        val message = "Trip heatmap query: resolution=$resolution, zoom=$zoom, " +
+        val message = "Trip heatmap query: requestedResolution=$requestedResolution, resolution=$resolution, zoom=$zoom, " +
             "cells=${visibleCells.size}, bounds=${expandedBounds.south}," +
             "${expandedBounds.west},${expandedBounds.north},${expandedBounds.east}"
         Log.d(Tag, message)
@@ -43,10 +47,30 @@ class TripHeatmapStore(
         )
     }
 
+    private fun selectVisibleResolution(
+        requestedResolution: Int,
+        bounds: PhotoMapBounds
+    ): Int {
+        var resolution = requestedResolution
+        while (resolution > MinFallbackResolution) {
+            val count = database.getVisibleTripHeatCells(
+                resolution = resolution,
+                bounds = bounds
+            ).size
+            if (count >= MinVisibleCellsForResolution) {
+                return resolution
+            }
+            resolution -= 1
+        }
+        return resolution
+    }
+
     companion object {
         private const val Tag = "PhotoMapTripHeat"
-        private const val ViewportPaddingFactor = 0.45
+        private const val ViewportPaddingFactor = 0.85
         private const val MinNormalizationIntensity = 0.0001
+        private const val MinFallbackResolution = 4
+        private const val MinVisibleCellsForResolution = 6
     }
 }
 

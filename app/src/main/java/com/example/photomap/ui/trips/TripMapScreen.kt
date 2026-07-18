@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -94,6 +99,10 @@ import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
+import com.example.photomap.ui.components.MiniPhotoGallery
+import com.example.photomap.ui.components.PhotoDateGridDay
+import com.example.photomap.ui.components.PhotoDateGridGroup
+import com.example.photomap.ui.components.photoDateGridGroups
 import com.example.photomap.ui.map.PhotoMapLayerController
 import com.example.photomap.ui.map.TripHeatmapFeatureMapper
 import java.util.Date
@@ -258,13 +267,19 @@ fun TripDetailsScreen(
     val context = LocalContext.current
     val tripPhotos = remember(photos) { photos.sortedChronologically() }
     val photosById = remember(tripPhotos) { tripPhotos.associateBy { photo -> photo.mediaId } }
-    val gridState = rememberLazyGridState()
+    val galleryListState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var selectedPhotoId by remember { mutableStateOf<Long?>(null) }
     var routeCenterRequestKey by remember { mutableStateOf(0) }
+    var isGalleryExpanded by remember { mutableStateOf(false) }
     val routePoints = remember(tripPhotos) { tripPhotos.toTripRoutePoints() }
-    val photoGridIndexById = remember(tripPhotos) {
-        tripPhotos.withIndex().associate { indexedPhoto -> indexedPhoto.value.mediaId to indexedPhoto.index }
+    val photoDayGroups = remember(tripPhotos) {
+        photoDateGridGroups(tripPhotos, newestFirst = false)
+    }
+    val photoDayGroupIndexById = remember(photoDayGroups) {
+        photoDayGroups.flatMapIndexed { index, group ->
+            group.photos.map { photo -> photo.mediaId to index }
+        }.toMap()
     }
     val dateTitle = remember(context, tripPhotos, tripMarker) {
         formatTripDateRange(context = context, photos = tripPhotos, marker = tripMarker)
@@ -282,9 +297,9 @@ fun TripDetailsScreen(
     }
     val onRoutePhotoClick: (Long) -> Unit = { photoId ->
         selectedPhotoId = photoId
-        photoGridIndexById[photoId]?.let { index ->
+        photoDayGroupIndexById[photoId]?.let { index ->
             coroutineScope.launch {
-                gridState.animateScrollToItem(index)
+                galleryListState.animateScrollToItem(index)
             }
         }
     }
@@ -304,43 +319,57 @@ fun TripDetailsScreen(
                     onCenterRoute = { routeCenterRequestKey += 1 },
                     onBack = onBack
                 )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .clipToBounds()
-                ) {
-                    TripRouteMap(
-                        routePoints = routePoints,
-                        photosById = photosById,
-                        mapStyleUrl = mapStyleUrl,
-                        selectedPhotoId = selectedPhotoId,
-                        centerRequestKey = routeCenterRequestKey,
-                        onPhotoPointClick = onRoutePhotoClick,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    TripPhotoScrubber(
-                        routePoints = routePoints,
-                        selectedPhotoId = selectedPhotoId,
-                        onFocusPhoto = onRoutePhotoClick,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 10.dp)
-                    )
-                    if (routePoints.isEmpty()) {
-                        TripDetailsEmptyRouteMessage()
+                BoxWithConstraints(modifier = Modifier.weight(1f)) {
+                    val maxSheetHeight = (maxHeight * TripGalleryExpandedFraction)
+                        .coerceAtLeast(TripGalleryHeight)
+                    val sheetHeight = if (isGalleryExpanded) {
+                        maxSheetHeight
+                    } else {
+                        TripGalleryHeight.coerceAtMost(maxSheetHeight)
+                    }
+
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clipToBounds()
+                        ) {
+                            TripRouteMap(
+                                routePoints = routePoints,
+                                photosById = photosById,
+                                mapStyleUrl = mapStyleUrl,
+                                selectedPhotoId = selectedPhotoId,
+                                centerRequestKey = routeCenterRequestKey,
+                                onPhotoPointClick = onRoutePhotoClick,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            TripPhotoScrubber(
+                                routePoints = routePoints,
+                                selectedPhotoId = selectedPhotoId,
+                                onFocusPhoto = onRoutePhotoClick,
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 10.dp)
+                            )
+                            if (routePoints.isEmpty()) {
+                                TripDetailsEmptyRouteMessage()
+                            }
+                        }
+                        TripPhotoGallerySheet(
+                            groups = photoDayGroups,
+                            listState = galleryListState,
+                            selectedPhotoId = selectedPhotoId,
+                            isExpanded = isGalleryExpanded,
+                            onExpandedChange = { expanded -> isGalleryExpanded = expanded },
+                            onPhotoClick = { photo -> context.openPhotoInDefaultGallery(photo) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(sheetHeight)
+                                .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
+                        )
                     }
                 }
-                TripPhotoGrid(
-                    photos = tripPhotos,
-                    gridState = gridState,
-                    selectedPhotoId = selectedPhotoId,
-                    onPhotoClick = { photo -> context.openPhotoInDefaultGallery(photo) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TripGalleryHeight)
-                        .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
-                )
             }
         }
     }
@@ -1444,6 +1473,181 @@ private fun TripRoutePhotoMarker(
 }
 
 @Composable
+private fun TripPhotoGallerySheet(
+    groups: List<PhotoDateGridGroup>,
+    listState: LazyListState,
+    selectedPhotoId: Long?,
+    isExpanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onPhotoClick: (DevicePhoto) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    Surface(
+        modifier = modifier,
+        color = Color(0xFF0D111C),
+        contentColor = Color.White,
+        shadowElevation = 10.dp
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(isExpanded) {
+                        detectDragGestures(
+                            onDragStart = { dragOffsetY = 0f },
+                            onDrag = { _, dragAmount -> dragOffsetY += dragAmount.y },
+                            onDragEnd = {
+                                when {
+                                    dragOffsetY < -TripGalleryDragThresholdPx -> onExpandedChange(true)
+                                    dragOffsetY > TripGalleryDragThresholdPx -> onExpandedChange(false)
+                                }
+                                dragOffsetY = 0f
+                            },
+                            onDragCancel = { dragOffsetY = 0f }
+                        )
+                    }
+                    .clickable { onExpandedChange(!isExpanded) }
+                    .padding(top = 8.dp, bottom = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(44.dp)
+                        .height(4.dp)
+                        .background(
+                            color = Color(0xFF6F7D99),
+                            shape = RoundedCornerShape(2.dp)
+                        )
+                )
+            }
+            if (groups.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "В поездке пока нет фотографий",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFFB8C3D8)
+                    )
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(18.dp)
+                ) {
+                    items(groups, key = { group -> group.day }) { group ->
+                        PhotoDateGridDay(
+                            group = group,
+                            selectedPhotoId = selectedPhotoId,
+                            dayTextColor = Color.White,
+                            maxItems = TripMiniGalleryMaxItems,
+                            onPhotoClick = onPhotoClick
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TripPhotoGallerySheet(
+    photos: List<DevicePhoto>,
+    gridState: LazyGridState,
+    selectedPhotoId: Long?,
+    isExpanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onPhotoClick: (DevicePhoto) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var dragOffsetY by remember { mutableStateOf(0f) }
+    Surface(
+        modifier = modifier,
+        color = Color(0xFF0D111C),
+        contentColor = Color.White,
+        shadowElevation = 10.dp
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(isExpanded) {
+                        detectDragGestures(
+                            onDragStart = { dragOffsetY = 0f },
+                            onDrag = { _, dragAmount ->
+                                dragOffsetY += dragAmount.y
+                            },
+                            onDragEnd = {
+                                when {
+                                    dragOffsetY < -TripGalleryDragThresholdPx -> onExpandedChange(true)
+                                    dragOffsetY > TripGalleryDragThresholdPx -> onExpandedChange(false)
+                                }
+                                dragOffsetY = 0f
+                            },
+                            onDragCancel = { dragOffsetY = 0f }
+                        )
+                    }
+                    .clickable { onExpandedChange(!isExpanded) }
+                    .padding(top = 8.dp, start = 12.dp, end = 12.dp, bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(44.dp)
+                        .height(4.dp)
+                        .background(
+                            color = Color(0xFF6F7D99),
+                            shape = RoundedCornerShape(2.dp)
+                        )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Фото поездки",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (isExpanded) "Свернуть" else "Развернуть",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFB8C3D8)
+                    )
+                }
+                if (photos.isNotEmpty()) {
+                    MiniPhotoGallery(
+                        photos = photos,
+                        modifier = Modifier.fillMaxWidth(),
+                        thumbnailSize = 58.dp,
+                        contentPadding = PaddingValues(horizontal = 2.dp),
+                        maxItems = TripMiniGalleryMaxItems,
+                        onPhotoClick = onPhotoClick
+                    )
+                }
+            }
+            TripPhotoGrid(
+                photos = photos,
+                gridState = gridState,
+                selectedPhotoId = selectedPhotoId,
+                onPhotoClick = onPhotoClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
 private fun TripPhotoGrid(
     photos: List<DevicePhoto>,
     gridState: LazyGridState,
@@ -1496,7 +1700,8 @@ private fun TripPhotoGrid(
 private fun TripPhotoGridItem(
     photo: DevicePhoto,
     selected: Boolean,
-    onPhotoClick: (DevicePhoto) -> Unit
+    onPhotoClick: (DevicePhoto) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val thumbnail by produceState<Bitmap?>(initialValue = null, photo.uri) {
@@ -1510,7 +1715,7 @@ private fun TripPhotoGridItem(
     }
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .aspectRatio(1f)
             .clickable { onPhotoClick(photo) },
         shape = RoundedCornerShape(8.dp),
@@ -2139,6 +2344,9 @@ private val TripPhotoScrubberThumbHeight = 31.dp
 private val TripPhotoScrubberTrackPadding = 18.dp
 private val TripPhotoScrubberTrackWidth = 3.dp
 private val TripGalleryHeight = 248.dp
+private const val TripGalleryExpandedFraction = 0.64f
+private const val TripGalleryDragThresholdPx = 24f
+private const val TripMiniGalleryMaxItems = 36
 private val TripGalleryCellMinSize = 86.dp
 private val TripRouteThumbnailSize = 42.dp
 private val TripRouteLineWidth = 6.dp

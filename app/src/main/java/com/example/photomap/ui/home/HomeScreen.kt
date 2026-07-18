@@ -1,8 +1,7 @@
 package com.example.photomap.ui.home
 
-import android.os.Bundle
-import android.util.Log
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,64 +31,44 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import com.example.photomap.data.cluster.PhotoMapBounds
+import androidx.compose.ui.res.painterResource
 import com.example.photomap.data.heatmap.VisibleTripHeatCell
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.photoDateDayToMillis
 import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.domain.trip.TripMapMarker
-import com.example.photomap.ui.components.MiniPhotoGallery
 import com.example.photomap.ui.components.MiniPhotoThumbnail
-import com.example.photomap.ui.map.PhotoMapLayerController
-import com.example.photomap.ui.map.TripHeatmapFeatureMapper
+import com.example.photomap.ui.components.PhotoDateGridDay
+import com.example.photomap.ui.components.photoDateGridGroups
 import com.example.photomap.ui.permissions.PhotoAccessUiState
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import org.maplibre.android.MapLibre
-import org.maplibre.android.camera.CameraUpdateFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
-import org.maplibre.android.geometry.LatLngBounds
-import org.maplibre.android.maps.MapLibreMap
-import org.maplibre.android.maps.MapView
-import org.maplibre.android.style.layers.CircleLayer
-import org.maplibre.android.style.layers.PropertyFactory.circleColor
-import org.maplibre.android.style.layers.PropertyFactory.circleOpacity
-import org.maplibre.android.style.layers.PropertyFactory.circleRadius
-import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
-import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
-import org.maplibre.android.style.sources.GeoJsonSource
-import org.maplibre.geojson.Feature
-import org.maplibre.geojson.FeatureCollection
-import org.maplibre.geojson.Point
-import kotlin.math.roundToInt
+import kotlin.math.ln
 
 data class HomeSectionHeights(
     val heatmapHeight: Dp,
@@ -120,33 +99,38 @@ data class HomePlaceCardUiModel(
 @Composable
 fun HomeScreen(
     state: PhotoAccessUiState,
-    mapStyleUrl: String,
+    places: List<HomePlaceCardUiModel>,
     onOpenMap: () -> Unit,
     onOpenAllTrips: () -> Unit,
     onOpenTrip: (Long) -> Unit,
     onOpenAllPlaces: () -> Unit,
     onOpenPlace: (String) -> Unit,
     onOpenSettings: () -> Unit,
-    onRefresh: () -> Unit,
-    onHeatmapViewportChanged: (PhotoMapBounds, Double) -> Unit
+    onRefresh: () -> Unit
 ) {
+    val photos = state.photos
     val photosWithLocation = remember(state.photos) {
         state.photos.filter { photo -> photo.hasLocation }
+    }
+    val photosById = remember(photos) {
+        photos.associateBy { photo -> photo.mediaId }
     }
     val featuredTrips = remember(state.tripMarkers) {
         state.tripMarkers
             .sortedWith(compareByDescending<TripMapMarker> { marker -> marker.endDay }.thenByDescending { it.photoCount })
             .take(12)
     }
-    val places = remember(state.photos) {
-        buildHomePlaceModels(state.photos)
+    val onThisDay by produceState(initialValue = emptyOnThisDayUiState(), photos) {
+        value = withContext(Dispatchers.Default) {
+            buildOnThisDayUiState(photos)
+        }
     }
-    val onThisDay = remember(state.photos) {
-        buildOnThisDayUiState(state.photos)
+    val homePositions = remember(photosWithLocation, state.tripMarkers) {
+        homeMapPositions(photosWithLocation, state.tripMarkers)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        HomeTopBar(
+        HomeTopBarIconActions(
             photosWithLocationCount = photosWithLocation.size,
             tripCount = state.tripMarkers.size,
             isLoading = state.isLoading || state.isTripSegmentationRunning,
@@ -164,18 +148,16 @@ fun HomeScreen(
                     HomeHeatmapSection(
                         height = heights.heatmapHeight,
                         heatCells = state.visibleTripHeatCells,
-                        positions = homeMapPositions(photosWithLocation, state.tripMarkers),
-                        mapStyleUrl = mapStyleUrl,
+                        positions = homePositions,
                         isLoading = state.isLoading || state.isTripSegmentationRunning,
                         hasTrips = state.tripMarkers.isNotEmpty(),
-                        onOpenMap = onOpenMap,
-                        onViewportChanged = onHeatmapViewportChanged
+                        onOpenMap = onOpenMap
                     )
                 }
                 item {
                     FeaturedTripsSection(
                         trips = featuredTrips,
-                        photosById = state.photos.associateBy { photo -> photo.mediaId },
+                        photosById = photosById,
                         onOpenAllTrips = onOpenAllTrips,
                         onOpenTrip = onOpenTrip
                     )
@@ -192,7 +174,6 @@ fun HomeScreen(
                     OnThisDaySection(
                         height = heights.onThisDayHeight,
                         state = onThisDay,
-                        mapStyleUrl = mapStyleUrl,
                         onOpenMap = onOpenMap
                     )
                 }
@@ -245,14 +226,14 @@ fun AllPlacesScreen(
 @Composable
 fun PlaceDetailsScreen(
     place: HomePlaceCardUiModel?,
-    onBack: () -> Unit
+    onOpenMap: () -> Unit
 ) {
     Surface(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             SimpleHomeTopBar(
                 title = place?.title ?: "Место",
-                actionText = "Назад",
-                onAction = onBack
+                actionText = "Открыть на карте",
+                onAction = onOpenMap
             )
             if (place == null) {
                 HomeEmptyState(
@@ -261,6 +242,9 @@ fun PlaceDetailsScreen(
                     modifier = Modifier.weight(1f)
                 )
             } else {
+                val photoGroups = remember(place.photos) {
+                    photoDateGridGroups(place.photos)
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
@@ -269,17 +253,8 @@ fun PlaceDetailsScreen(
                     item {
                         PlaceDetailsHeader(place = place)
                     }
-                    groupedPhotosByDay(place.photos).forEach { group ->
-                        item(key = "day-${group.day}") {
-                            Text(
-                                text = formatDate(group.day),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                        item(key = "photos-${group.day}") {
-                            MiniPhotoGallery(photos = group.photos)
-                        }
+                    items(photoGroups, key = { group -> group.day }) { group ->
+                        PhotoDateGridDay(group = group)
                     }
                 }
             }
@@ -287,46 +262,213 @@ fun PlaceDetailsScreen(
     }
 }
 
-fun buildHomePlaceModels(photos: List<DevicePhoto>): List<HomePlaceCardUiModel> {
-    return photos
-        .asSequence()
-        .filter { photo -> photo.latitude != null && photo.longitude != null }
-        .groupBy { photo ->
-            val latitudeCell = ((photo.latitude ?: 0.0) / PlaceCellSizeDegrees).roundToInt()
-            val longitudeCell = ((photo.longitude ?: 0.0) / PlaceCellSizeDegrees).roundToInt()
-            "p_${latitudeCell}_${longitudeCell}"
+fun buildHomePlaceModels(
+    photos: List<DevicePhoto>,
+    maxPlaces: Int = MaxHomePlaceModels,
+    maxPreviewPhotosPerPlace: Int = MaxHomePlacePreviewPhotos
+): List<HomePlaceCardUiModel> {
+    val photosByGeoObject = linkedMapOf<String, MutableList<DevicePhoto>>()
+    val geoObjectsById = linkedMapOf<String, HomeGeoObjectMatch>()
+    photos.forEach { photo ->
+        photo.homeGeoObjectMatches().forEach { geoObject ->
+            geoObjectsById.putIfAbsent(geoObject.id, geoObject)
+            photosByGeoObject.getOrPut(geoObject.id) { mutableListOf() } += photo
         }
+    }
+
+    return photosByGeoObject
         .mapNotNull { (id, groupedPhotos) ->
+            val geoObject = geoObjectsById[id] ?: return@mapNotNull null
             val validPhotos = groupedPhotos
-                .filter { photo -> photo.latitude != null && photo.longitude != null }
+                .distinctBy { photo -> photo.mediaId }
                 .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
             if (validPhotos.isEmpty()) {
                 return@mapNotNull null
             }
-            val latitude = validPhotos.mapNotNull { photo -> photo.latitude }.average()
-            val longitude = validPhotos.mapNotNull { photo -> photo.longitude }.average()
-            val visitDays = validPhotos
-                .mapNotNull { photo -> photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) } }
-                .toSet()
-                .size
-                .coerceAtLeast(1)
-            HomePlaceCardUiModel(
-                id = id,
-                title = formatPlaceCoordinateTitle(latitude, longitude),
-                latitude = latitude,
-                longitude = longitude,
-                visitCount = visitDays,
+
+            val activeDays = validPhotos.activeDayCount()
+            val sessionCount = validPhotos.placeSessionCount(geoObject.facet)
+            val activeMonths = validPhotos.activeMonthCount()
+            val tripCount = validPhotos.tripLikeVisitCount()
+            val score = placeScore(
                 photoCount = validPhotos.size,
-                latestAt = validPhotos.firstOrNull()?.photoDateMillis(),
-                coverPhoto = validPhotos.firstOrNull(),
-                photos = validPhotos
+                sessionCount = sessionCount,
+                activeDays = activeDays,
+                activeMonths = activeMonths,
+                tripCount = tripCount,
+                importance = geoObject.importance
+            )
+            HomeScoredPlace(
+                place = HomePlaceCardUiModel(
+                    id = id,
+                    title = geoObject.name,
+                    latitude = geoObject.centerLatitude,
+                    longitude = geoObject.centerLongitude,
+                    visitCount = sessionCount.coerceAtLeast(activeDays),
+                    photoCount = validPhotos.size,
+                    latestAt = validPhotos.firstOrNull()?.photoDateMillis(),
+                    coverPhoto = validPhotos.firstOrNull(),
+                    photos = validPhotos.take(maxPreviewPhotosPerPlace)
+                ),
+                photoIds = validPhotos.map { photo -> photo.mediaId }.toSet(),
+                score = score,
+                facet = geoObject.facet
             )
         }
         .sortedWith(
-            compareByDescending<HomePlaceCardUiModel> { place -> place.visitCount }
-                .thenByDescending { place -> place.photoCount }
-                .thenByDescending { place -> place.latestAt ?: 0L }
+            compareByDescending<HomeScoredPlace> { scoredPlace -> scoredPlace.score }
+                .thenByDescending { scoredPlace -> scoredPlace.place.latestAt ?: 0L }
+                .thenBy { scoredPlace -> scoredPlace.place.title }
         )
+        .hierarchyAware()
+        .map { scoredPlace -> scoredPlace.place }
+        .take(maxPlaces)
+}
+
+fun photosForHomePlace(
+    photos: List<DevicePhoto>,
+    placeId: String
+): List<DevicePhoto> {
+    return photos
+        .asSequence()
+        .filter { photo -> photo.homeGeoObjectMatches().any { geoObject -> geoObject.id == placeId } }
+        .sortedWith(compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }.thenBy { it.mediaId })
+        .toList()
+}
+
+@Composable
+private fun HomeTopBarIconActions(
+    photosWithLocationCount: Int,
+    tripCount: Int,
+    isLoading: Boolean,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Моя карта",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$photosWithLocationCount фото на карте · $tripCount поездок",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.padding(start = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                TextButton(onClick = onRefresh) {
+                    Text(
+                        text = "Обновить",
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_manage),
+                        contentDescription = "Настройки"
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeTopBarCompact(
+    photosWithLocationCount: Int,
+    tripCount: Int,
+    isLoading: Boolean,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Моя карта",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "$photosWithLocationCount фото на карте · $tripCount поездок",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                modifier = Modifier.padding(start = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                TextButton(onClick = onRefresh) {
+                    Text(
+                        text = "Обновить",
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                }
+                TextButton(onClick = onOpenSettings) {
+                    Text(
+                        text = "Настройки",
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -351,19 +493,27 @@ private fun HomeTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Text(
                     text = "Моя карта",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "$photosWithLocationCount фото на карте · $tripCount поездок",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             Row(
+                modifier = Modifier.padding(start = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -417,11 +567,9 @@ private fun HomeHeatmapSection(
     height: Dp,
     heatCells: List<VisibleTripHeatCell>,
     positions: List<LatLng>,
-    mapStyleUrl: String,
     isLoading: Boolean,
     hasTrips: Boolean,
-    onOpenMap: () -> Unit,
-    onViewportChanged: (PhotoMapBounds, Double) -> Unit
+    onOpenMap: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -430,11 +578,9 @@ private fun HomeHeatmapSection(
             .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        HomeHeatmapMap(
+        HomeHeatmapPreview(
             heatCells = heatCells,
-            positions = positions,
-            mapStyleUrl = mapStyleUrl,
-            onViewportChanged = onViewportChanged
+            positions = positions
         )
         Box(
             modifier = Modifier
@@ -534,7 +680,7 @@ private fun FeaturedTripsSection(
                         trip = trip,
                         coverPhoto = trip.coverPhotoId?.let { photoId -> photosById[photoId] },
                         modifier = Modifier
-                            .fillParentMaxWidth(0.38f)
+                            .fillParentMaxWidth(HomeCarouselCardWidthFraction)
                             .height(172.dp)
                             .clickable { onOpenTrip(trip.tripId) }
                     )
@@ -572,7 +718,7 @@ private fun PopularPlacesSection(
                     PlaceCard(
                         place = place,
                         modifier = Modifier
-                            .fillParentMaxWidth(0.54f)
+                            .fillParentMaxWidth(HomeCarouselCardWidthFraction)
                             .height(height)
                             .clickable { onOpenPlace(place.id) }
                     )
@@ -586,7 +732,6 @@ private fun PopularPlacesSection(
 private fun OnThisDaySection(
     height: Dp,
     state: OnThisDayUiState,
-    mapStyleUrl: String,
     onOpenMap: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -604,10 +749,7 @@ private fun OnThisDaySection(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
             if (state.points.isNotEmpty()) {
-                HomeMemoryMap(
-                    points = state.points,
-                    mapStyleUrl = mapStyleUrl
-                )
+                HomeMemoryPreview(points = state.points)
             }
             Box(
                 modifier = Modifier
@@ -900,187 +1042,242 @@ private fun HomeInlineEmptyState(
 }
 
 @Composable
-private fun HomeHeatmapMap(
+private fun HomeHeatmapPreview(
     heatCells: List<VisibleTripHeatCell>,
-    positions: List<LatLng>,
-    mapStyleUrl: String,
-    onViewportChanged: (PhotoMapBounds, Double) -> Unit
+    positions: List<LatLng>
 ) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val layerController = remember { PhotoMapLayerController() }
-    var map by remember { mutableStateOf<MapLibreMap?>(null) }
-    var isStyleReady by remember { mutableStateOf(false) }
-    val latestHeatCells = rememberUpdatedState(heatCells)
-    val latestPositions = rememberUpdatedState(positions)
-    val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
-    val mapView = remember {
-        MapLibre.getInstance(context.applicationContext)
-        MapView(context).apply {
-            onCreate(Bundle())
-            getMapAsync { mapLibreMap ->
-                map = mapLibreMap
-                mapLibreMap.uiSettings.setAllGesturesEnabled(false)
-                mapLibreMap.setStyle(mapStyleUrl) { style ->
-                    layerController.reset()
-                    layerController.updateTripHeatmap(
-                        style = style,
-                        featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(latestHeatCells.value)
-                    )
-                    isStyleReady = true
-                    post {
-                        mapLibreMap.fitHomePositions(latestPositions.value)
-                        mapLibreMap.dispatchHomeViewportChanged(latestOnViewportChanged.value)
-                    }
-                    postDelayed(
-                        { mapLibreMap.dispatchHomeViewportChanged(latestOnViewportChanged.value) },
-                        HomeMapViewportRefreshDelayMs
+    val points = remember(heatCells, positions) {
+        if (heatCells.isNotEmpty()) {
+            heatCells
+                .asSequence()
+                .sortedByDescending { cell -> cell.normalizedIntensity }
+                .take(MaxHomePreviewHeatPoints)
+                .map { cell ->
+                    HomePreviewPoint(
+                        latitude = cell.centerLatitude,
+                        longitude = cell.centerLongitude,
+                        weight = cell.normalizedIntensity.toFloat().coerceIn(0.12f, 1f)
                     )
                 }
-            }
+                .toList()
+        } else {
+            positions
+                .asSequence()
+                .take(MaxHomePreviewHeatPoints)
+                .map { position ->
+                    HomePreviewPoint(
+                        latitude = position.latitude,
+                        longitude = position.longitude,
+                        weight = 0.38f
+                    )
+                }
+                .toList()
         }
     }
-
-    HomeMapLifecycle(lifecycleOwner = lifecycleOwner, mapView = mapView)
-
-    LaunchedEffect(map, isStyleReady, heatCells) {
-        val mapLibreMap = map ?: return@LaunchedEffect
-        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
-        layerController.updateTripHeatmap(
-            style = style,
-            featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(heatCells)
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF8FA69B))
+    ) {
+        drawRect(Color(0xFF7D948C))
+        drawCircle(
+            color = Color(0xFFB5C9BA).copy(alpha = 0.32f),
+            radius = maxOf(size.width, size.height) * 0.42f,
+            center = Offset(size.width * 0.62f, size.height * 0.34f)
         )
+        drawCircle(
+            color = Color(0xFF5D7FA5).copy(alpha = 0.28f),
+            radius = maxOf(size.width, size.height) * 0.24f,
+            center = Offset(size.width * 0.18f, size.height * 0.18f)
+        )
+        points.forEach { point ->
+            val center = point.toPreviewOffset(width = size.width, height = size.height)
+            drawCircle(
+                color = Color(0xFFFF5C7A).copy(alpha = 0.18f + point.weight * 0.34f),
+                radius = 18f + point.weight * 54f,
+                center = center
+            )
+            drawCircle(
+                color = Color(0xFFFFD166).copy(alpha = 0.12f + point.weight * 0.24f),
+                radius = 7f + point.weight * 18f,
+                center = center
+            )
+        }
     }
-
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { mapView }
-    )
 }
 
 @Composable
-private fun HomeMemoryMap(
-    points: List<OnThisDayMapPoint>,
-    mapStyleUrl: String
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var map by remember { mutableStateOf<MapLibreMap?>(null) }
-    var isStyleReady by remember { mutableStateOf(false) }
-    val latestPoints = rememberUpdatedState(points)
-    val mapView = remember {
-        MapLibre.getInstance(context.applicationContext)
-        MapView(context).apply {
-            onCreate(Bundle())
-            getMapAsync { mapLibreMap ->
-                map = mapLibreMap
-                mapLibreMap.uiSettings.setAllGesturesEnabled(false)
-                mapLibreMap.setStyle(mapStyleUrl) { style ->
-                    style.recreateMemoryPointLayer(latestPoints.value)
-                    isStyleReady = true
-                    post { mapLibreMap.fitHomePositions(latestPoints.value.map { point -> LatLng(point.latitude, point.longitude) }) }
-                }
+private fun HomeMemoryPreview(points: List<OnThisDayMapPoint>) {
+    val previewPoints = remember(points) {
+        points
+            .asSequence()
+            .take(MaxHomePreviewMemoryPoints)
+            .map { point ->
+                HomePreviewPoint(
+                    latitude = point.latitude,
+                    longitude = point.longitude,
+                    weight = 0.74f
+                )
             }
+            .toList()
+    }
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF586C74))
+    ) {
+        drawRect(Color(0xFF596F73))
+        drawCircle(
+            color = Color(0xFF86A798).copy(alpha = 0.34f),
+            radius = maxOf(size.width, size.height) * 0.44f,
+            center = Offset(size.width * 0.64f, size.height * 0.42f)
+        )
+        previewPoints.forEach { point ->
+            val center = point.toPreviewOffset(width = size.width, height = size.height)
+            drawCircle(
+                color = Color(0xFFFF5C7A).copy(alpha = 0.72f),
+                radius = 9f,
+                center = center
+            )
+            drawCircle(
+                color = Color.White.copy(alpha = 0.86f),
+                radius = 3.5f,
+                center = center
+            )
         }
     }
+}
 
-    HomeMapLifecycle(lifecycleOwner = lifecycleOwner, mapView = mapView)
+private fun List<DevicePhoto>.activeDayCount(): Int {
+    return mapNotNull { photo ->
+        photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
+    }.toSet().size.coerceAtLeast(1)
+}
 
-    LaunchedEffect(map, isStyleReady, points) {
-        val mapLibreMap = map ?: return@LaunchedEffect
-        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
-        style.recreateMemoryPointLayer(points)
+private fun List<DevicePhoto>.activeMonthCount(): Int {
+    return mapNotNull { photo ->
+        val millis = photo.photoDateMillis() ?: return@mapNotNull null
+        Calendar.getInstance().apply { timeInMillis = millis }.let { calendar ->
+            calendar.get(Calendar.YEAR) * 12 + calendar.get(Calendar.MONTH)
+        }
+    }.toSet().size.coerceAtLeast(1)
+}
+
+private fun List<DevicePhoto>.placeSessionCount(facet: PlaceFacet): Int {
+    val timestamps = mapNotNull { photo -> photo.photoDateMillis() }.sorted()
+    if (timestamps.isEmpty()) {
+        return activeDayCount()
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { mapView }
+    val gapMs = when (facet) {
+        PlaceFacet.City -> 36L * 60L * 60L * 1000L
+        PlaceFacet.District,
+        PlaceFacet.Neighbourhood -> 24L * 60L * 60L * 1000L
+        PlaceFacet.NaturalArea,
+        PlaceFacet.Landmark,
+        PlaceFacet.Transport,
+        PlaceFacet.Venue -> 4L * 60L * 60L * 1000L
+        PlaceFacet.Country,
+        PlaceFacet.Region,
+        PlaceFacet.Unknown,
+        PlaceFacet.Technical -> 36L * 60L * 60L * 1000L
+    }
+    var sessions = 1
+    var previous = timestamps.first()
+    timestamps.drop(1).forEach { timestamp ->
+        if (timestamp - previous > gapMs) {
+            sessions += 1
+        }
+        previous = timestamp
+    }
+    return sessions
+}
+
+private fun List<DevicePhoto>.tripLikeVisitCount(): Int {
+    val days = mapNotNull { photo ->
+        photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
+    }.distinct().sorted()
+    if (days.isEmpty()) {
+        return 1
+    }
+
+    var visits = 1
+    var previous = days.first()
+    days.drop(1).forEach { day ->
+        if (day - previous > TripLikeVisitGapDays) {
+            visits += 1
+        }
+        previous = day
+    }
+    return visits
+}
+
+private fun placeScore(
+    photoCount: Int,
+    sessionCount: Int,
+    activeDays: Int,
+    activeMonths: Int,
+    tripCount: Int,
+    importance: Double
+): Double {
+    return importance *
+        (
+            3.0 * ln(1.0 + sessionCount) +
+                2.0 * ln(1.0 + activeDays) +
+                1.5 * ln(1.0 + activeMonths) +
+                1.0 * ln(1.0 + tripCount) +
+                0.3 * ln(1.0 + photoCount)
+            )
+}
+
+private fun List<HomeScoredPlace>.hierarchyAware(): List<HomeScoredPlace> {
+    val remaining = toMutableList()
+    val selected = mutableListOf<HomeScoredPlace>()
+    while (remaining.isNotEmpty() && selected.size < MaxHomePlaceModels) {
+        val next = remaining.maxBy { candidate -> candidate.displayScoreAfter(selected) }
+        selected += next
+        remaining -= next
+    }
+    return selected
+}
+
+private fun HomeScoredPlace.displayScoreAfter(selected: List<HomeScoredPlace>): Double {
+    return selected.fold(score) { currentScore, selectedPlace ->
+        val overlap = photoIds.overlapWith(selectedPlace.photoIds)
+        val related = geoObjectsAreRelated(place.id, selectedPlace.place.id)
+        val penalty = when {
+            related && overlap > 0.85 -> 0.88
+            related && overlap > 0.65 -> 0.94
+            overlap > 0.85 -> 0.42
+            overlap > 0.65 -> 0.68
+            facet == selectedPlace.facet && overlap > 0.40 -> 0.82
+            else -> 1.0
+        }
+        currentScore * penalty
+    }
+}
+
+private fun Set<Long>.overlapWith(other: Set<Long>): Double {
+    val baseSize = minOf(size, other.size)
+    if (baseSize == 0) {
+        return 0.0
+    }
+    return count { id -> id in other }.toDouble() / baseSize.toDouble()
+}
+
+private fun emptyOnThisDayUiState(): OnThisDayUiState {
+    val now = Calendar.getInstance()
+    val subtitle = SimpleDateFormat("d MMMM", Locale("ru")).format(now.time) + " в разные годы"
+    return OnThisDayUiState(
+        day = now.get(Calendar.DAY_OF_MONTH),
+        month = now.get(Calendar.MONTH) + 1,
+        years = emptyList(),
+        photoCount = 0,
+        points = emptyList(),
+        previewPhotos = emptyList(),
+        subtitle = subtitle,
+        isEmpty = true
     )
-}
-
-@Composable
-private fun HomeMapLifecycle(
-    lifecycleOwner: androidx.lifecycle.LifecycleOwner,
-    mapView: MapView
-) {
-    DisposableEffect(lifecycleOwner, mapView) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
-                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
-                Lifecycle.Event.ON_STOP -> mapView.onStop()
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            mapView.onDestroy()
-        }
-    }
-}
-
-private fun org.maplibre.android.maps.Style.recreateMemoryPointLayer(points: List<OnThisDayMapPoint>) {
-    runCatching { removeLayer(HomeMemoryLayerId) }
-    runCatching { removeSource(HomeMemorySourceId) }
-    val features = points.map { point ->
-        Feature.fromGeometry(Point.fromLngLat(point.longitude, point.latitude)).apply {
-            addNumberProperty("year", point.year)
-            addStringProperty("photo_id", point.photoId.toString())
-        }
-    }
-    addSource(GeoJsonSource(HomeMemorySourceId, FeatureCollection.fromFeatures(features)))
-    addLayer(
-        CircleLayer(HomeMemoryLayerId, HomeMemorySourceId).withProperties(
-            circleRadius(8f),
-            circleColor("#FF5C7A"),
-            circleOpacity(0.88f),
-            circleStrokeColor("#FFFFFF"),
-            circleStrokeWidth(2f)
-        )
-    )
-}
-
-private fun MapLibreMap.fitHomePositions(positions: List<LatLng>) {
-    runCatching {
-        when (positions.size) {
-            0 -> moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(55.751244, 37.618423), 3.6))
-            1 -> moveCamera(CameraUpdateFactory.newLatLngZoom(positions.first(), 8.0))
-            else -> {
-                val bounds = LatLngBounds.Builder()
-                positions.forEach { position -> bounds.include(position) }
-                moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), HomeMapBoundsPaddingPx))
-            }
-        }
-    }.onFailure { error ->
-        Log.w(HomeLogTag, "Failed to fit home map", error)
-    }
-}
-
-private fun MapLibreMap.dispatchHomeViewportChanged(
-    onViewportChanged: (PhotoMapBounds, Double) -> Unit
-) {
-    runCatching {
-        val visibleRegion = projection.visibleRegion
-        val points = listOf(
-            visibleRegion.nearLeft,
-            visibleRegion.nearRight,
-            visibleRegion.farLeft,
-            visibleRegion.farRight
-        )
-        onViewportChanged(
-            PhotoMapBounds(
-                south = points.minOf { point -> point!!.latitude },
-                west = points.minOf { point -> point!!.longitude },
-                north = points.maxOf { point -> point!!.latitude },
-                east = points.maxOf { point -> point!!.longitude }
-            ),
-            cameraPosition.zoom
-        )
-    }.onFailure { error ->
-        Log.w(HomeLogTag, "Failed to dispatch home viewport", error)
-    }
 }
 
 private fun buildOnThisDayUiState(photos: List<DevicePhoto>): OnThisDayUiState {
@@ -1105,15 +1302,19 @@ private fun buildOnThisDayUiState(photos: List<DevicePhoto>): OnThisDayUiState {
         }
         .sortedByDescending { pair -> pair.second }
     val years = matchingPhotos.map { pair -> pair.second }.distinct()
-    val points = matchingPhotos.map { (photo, year) ->
-        OnThisDayMapPoint(
-            photoId = photo.mediaId,
-            latitude = requireNotNull(photo.latitude),
-            longitude = requireNotNull(photo.longitude),
-            year = year,
-            thumbnailUri = photo.uri
-        )
-    }
+    val points = matchingPhotos
+        .asSequence()
+        .take(MaxOnThisDayMapPoints)
+        .map { (photo, year) ->
+            OnThisDayMapPoint(
+                photoId = photo.mediaId,
+                latitude = requireNotNull(photo.latitude),
+                longitude = requireNotNull(photo.longitude),
+                year = year,
+                thumbnailUri = photo.uri
+            )
+        }
+        .toList()
     val subtitle = SimpleDateFormat("d MMMM", Locale("ru")).format(now.time) + " в разные годы"
     return OnThisDayUiState(
         day = day,
@@ -1131,35 +1332,23 @@ private fun homeMapPositions(
     photos: List<DevicePhoto>,
     trips: List<TripMapMarker>
 ): List<LatLng> {
-    val tripPositions = trips.map { marker -> LatLng(marker.latitude, marker.longitude) }
+    val tripPositions = trips
+        .asSequence()
+        .map { marker -> LatLng(marker.latitude, marker.longitude) }
+        .take(MaxHomeMapPositions)
+        .toList()
     if (tripPositions.isNotEmpty()) {
         return tripPositions
     }
-    return photos.mapNotNull { photo ->
-        val latitude = photo.latitude ?: return@mapNotNull null
-        val longitude = photo.longitude ?: return@mapNotNull null
-        LatLng(latitude, longitude)
-    }
-}
-
-private fun groupedPhotosByDay(photos: List<DevicePhoto>): List<PlacePhotoDayGroup> {
     return photos
+        .asSequence()
         .mapNotNull { photo ->
-            val day = photo.photoDateMillis()?.let { millis -> Math.floorDiv(millis, MillisPerDay) }
-                ?: return@mapNotNull null
-            day to photo
+            val latitude = photo.latitude ?: return@mapNotNull null
+            val longitude = photo.longitude ?: return@mapNotNull null
+            LatLng(latitude, longitude)
         }
-        .groupBy({ pair -> pair.first }, { pair -> pair.second })
-        .map { (day, groupPhotos) ->
-            PlacePhotoDayGroup(
-                day = day,
-                photos = groupPhotos.sortedWith(
-                    compareBy<DevicePhoto> { photo -> photo.photoDateMillis() ?: Long.MAX_VALUE }
-                        .thenBy { photo -> photo.mediaId }
-                )
-            )
-        }
-        .sortedByDescending { group -> group.day }
+        .take(MaxHomeMapPositions)
+        .toList()
 }
 
 private fun formatTripDateRange(startDay: Long, endDay: Long): String {
@@ -1174,16 +1363,8 @@ private fun formatTripDateRange(startDay: Long, endDay: Long): String {
     }
 }
 
-private fun formatDate(day: Long): String {
-    return SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(photoDateDayToMillis(day)))
-}
-
 private fun formatMillisDate(millis: Long): String {
     return SimpleDateFormat("d MMMM yyyy", Locale("ru")).format(Date(millis))
-}
-
-private fun formatPlaceCoordinateTitle(latitude: Double, longitude: Double): String {
-    return "%.4f, %.4f".format(Locale.US, latitude, longitude)
 }
 
 private data class OnThisDayUiState(
@@ -1205,15 +1386,31 @@ private data class OnThisDayMapPoint(
     val thumbnailUri: String
 )
 
-private data class PlacePhotoDayGroup(
-    val day: Long,
-    val photos: List<DevicePhoto>
+private data class HomeScoredPlace(
+    val place: HomePlaceCardUiModel,
+    val photoIds: Set<Long>,
+    val score: Double,
+    val facet: PlaceFacet
 )
 
-private const val PlaceCellSizeDegrees = 0.02
+private data class HomePreviewPoint(
+    val latitude: Double,
+    val longitude: Double,
+    val weight: Float
+)
+
+private fun HomePreviewPoint.toPreviewOffset(width: Float, height: Float): Offset {
+    val x = (((longitude + 180.0) / 360.0).coerceIn(0.0, 1.0) * width).toFloat()
+    val y = (((90.0 - latitude) / 180.0).coerceIn(0.0, 1.0) * height).toFloat()
+    return Offset(x, y)
+}
+
+private const val MaxHomePlaceModels = 200
+private const val MaxHomePlacePreviewPhotos = 80
+private const val MaxHomeMapPositions = 800
+private const val MaxOnThisDayMapPoints = 300
+private const val MaxHomePreviewHeatPoints = 180
+private const val MaxHomePreviewMemoryPoints = 80
+private const val HomeCarouselCardWidthFraction = 0.54f
+private const val TripLikeVisitGapDays = 3L
 private const val MillisPerDay = 24L * 60L * 60L * 1000L
-private const val HomeMapBoundsPaddingPx = 110
-private const val HomeMapViewportRefreshDelayMs = 350L
-private const val HomeMemorySourceId = "home-memory-source"
-private const val HomeMemoryLayerId = "home-memory-layer"
-private const val HomeLogTag = "PhotoMapHome"

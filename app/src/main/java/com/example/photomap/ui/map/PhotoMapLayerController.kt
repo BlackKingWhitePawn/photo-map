@@ -37,6 +37,8 @@ import org.maplibre.geojson.FeatureCollection
 
 class PhotoMapLayerController {
     private var configuredSourceKey: PhotoMapSourceKey? = null
+    private var isPhotoHeatmapConfigured: Boolean = false
+    private var isSelectedPhotoConfigured: Boolean = false
     private var isTripHeatmapConfigured: Boolean = false
 
     fun update(
@@ -82,7 +84,71 @@ class PhotoMapLayerController {
 
     fun reset() {
         configuredSourceKey = null
+        isPhotoHeatmapConfigured = false
+        isSelectedPhotoConfigured = false
         isTripHeatmapConfigured = false
+    }
+
+    fun updatePhotoHeatmap(
+        style: Style,
+        featureCollection: FeatureCollection
+    ) {
+        val source = style.getSourceAs<GeoJsonSource>(PHOTO_HEATMAP_SOURCE_ID)
+        if (source == null || !isPhotoHeatmapConfigured || style.getLayer(PHOTO_HEATMAP_LAYER_ID) == null) {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Recreate photo heatmap layer: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Recreate photo heatmap layer: features=${featureCollection.features()?.size}"
+            )
+            style.recreatePhotoHeatmapLayer(featureCollection)
+            isPhotoHeatmapConfigured = true
+        } else {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Update photo heatmap source: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Update photo heatmap source: features=${featureCollection.features()?.size}"
+            )
+            source.setGeoJson(featureCollection)
+        }
+    }
+
+    fun updateSelectedPhotoMarker(
+        style: Style,
+        featureCollection: FeatureCollection
+    ) {
+        val source = style.getSourceAs<GeoJsonSource>(SELECTED_PHOTO_SOURCE_ID)
+        if (source == null ||
+            !isSelectedPhotoConfigured ||
+            style.getLayer(SELECTED_PHOTO_HALO_LAYER_ID) == null ||
+            style.getLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID) == null
+        ) {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Recreate selected photo marker layers: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Recreate selected photo marker layers: features=${featureCollection.features()?.size}"
+            )
+            style.recreateSelectedPhotoMarkerLayers(featureCollection)
+            isSelectedPhotoConfigured = true
+        } else {
+            Log.d(
+                PhotoMapLayerLogTag,
+                "Update selected photo marker source: features=${featureCollection.features()?.size}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLayerLogTag,
+                "Update selected photo marker source: features=${featureCollection.features()?.size}"
+            )
+            source.setGeoJson(featureCollection)
+        }
     }
 
     fun updateTripHeatmap(
@@ -151,7 +217,11 @@ class PhotoMapLayerController {
         PhotoMapLayerIds.forEach { layerId ->
             style.setLayerVisible(layerId = layerId, visible = showPhotos)
         }
-        style.setLayerVisible(layerId = TRIP_HEATMAP_LAYER_ID, visible = showHeatmap)
+        style.setLayerVisible(layerId = PHOTO_HEATMAP_LAYER_ID, visible = showHeatmap)
+        SelectedPhotoLayerIds.forEach { layerId ->
+            style.setLayerVisible(layerId = layerId, visible = showHeatmap)
+        }
+        style.setLayerVisible(layerId = TRIP_HEATMAP_LAYER_ID, visible = false)
     }
 }
 
@@ -260,6 +330,119 @@ private fun Style.recreatePhotoMapLayers(
             ),
         PHOTO_UNCLUSTERED_LAYER_ID
     )
+}
+
+private fun Style.recreatePhotoHeatmapLayer(featureCollection: FeatureCollection) {
+    removeLayer(PHOTO_HEATMAP_LAYER_ID)
+    removeSource(PHOTO_HEATMAP_SOURCE_ID)
+
+    addSource(
+        GeoJsonSource(
+            PHOTO_HEATMAP_SOURCE_ID,
+            featureCollection
+        )
+    )
+
+    val heatmapLayer = HeatmapLayer(PHOTO_HEATMAP_LAYER_ID, PHOTO_HEATMAP_SOURCE_ID)
+        .withProperties(
+            heatmapWeight(Expression.get(PHOTO_HEATMAP_WEIGHT_PROPERTY)),
+            heatmapColor(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.heatmapDensity(),
+                    Expression.stop(0.00f, Expression.rgba(70, 30, 180, 0.0f)),
+                    Expression.stop(0.12f, Expression.rgba(110, 50, 210, 0.75f)),
+                    Expression.stop(0.35f, Expression.rgba(20, 180, 210, 0.85f)),
+                    Expression.stop(0.58f, Expression.rgba(80, 200, 110, 0.90f)),
+                    Expression.stop(0.78f, Expression.rgba(240, 190, 40, 0.95f)),
+                    Expression.stop(1.00f, Expression.rgba(210, 55, 145, 1.0f))
+                )
+            ),
+            heatmapIntensity(1.0f),
+            heatmapRadius(
+                Expression.interpolate(
+                    Expression.linear(),
+                    Expression.zoom(),
+                    Expression.stop(3, 26f),
+                    Expression.stop(8, 30f),
+                    Expression.stop(13, 34f),
+                    Expression.stop(17, 38f)
+                )
+            ),
+            heatmapOpacity(0.82f)
+        )
+
+    val photoLayerId = PhotoMapLayerIds.firstOrNull { layerId -> getLayer(layerId) != null }
+    if (photoLayerId != null) {
+        addLayerBelow(heatmapLayer, photoLayerId)
+        return
+    }
+
+    val selectedLayerId = SelectedPhotoLayerIds.firstOrNull { layerId -> getLayer(layerId) != null }
+    if (selectedLayerId != null) {
+        addLayerBelow(heatmapLayer, selectedLayerId)
+        return
+    }
+
+    val topBaseLayerId = layers.lastOrNull()?.id
+    if (topBaseLayerId == null) {
+        addLayer(heatmapLayer)
+    } else {
+        addLayerAbove(heatmapLayer, topBaseLayerId)
+    }
+}
+
+private fun Style.recreateSelectedPhotoMarkerLayers(featureCollection: FeatureCollection) {
+    removeLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID)
+    removeLayer(SELECTED_PHOTO_HALO_LAYER_ID)
+    removeSource(SELECTED_PHOTO_SOURCE_ID)
+
+    addSource(
+        GeoJsonSource(
+            SELECTED_PHOTO_SOURCE_ID,
+            featureCollection
+        )
+    )
+
+    val haloLayer = CircleLayer(SELECTED_PHOTO_HALO_LAYER_ID, SELECTED_PHOTO_SOURCE_ID)
+        .withProperties(
+            circleRadius(24f),
+            circleColor(0xFFFFFFFF.toInt()),
+            circleOpacity(0.76f),
+            circleStrokeColor(0xFF14B8A6.toInt()),
+            circleStrokeWidth(3f)
+        )
+    val symbolLayer = SymbolLayer(SELECTED_PHOTO_SYMBOL_LAYER_ID, SELECTED_PHOTO_SOURCE_ID)
+        .withProperties(
+            textField("+"),
+            textSize(30f),
+            textColor(0xFF7C3AED.toInt()),
+            textHaloColor(0xFFFFFFFF.toInt()),
+            textHaloWidth(2.0f),
+            textAllowOverlap(true),
+            textIgnorePlacement(true)
+        )
+
+    val anchorLayerId = listOf(
+        PHOTO_HEATMAP_LAYER_ID,
+        PHOTO_CLUSTER_LAYER_ID,
+        PHOTO_CLUSTER_THUMBNAIL_LAYER_ID,
+        PHOTO_CLUSTER_COUNT_LAYER_ID,
+        PHOTO_UNCLUSTERED_LAYER_ID,
+        PHOTO_THUMBNAIL_LAYER_ID
+    ).firstOrNull { layerId -> getLayer(layerId) != null }
+
+    if (anchorLayerId == null) {
+        val topBaseLayerId = layers.lastOrNull()?.id
+        if (topBaseLayerId == null) {
+            addLayer(haloLayer)
+        } else {
+            addLayerAbove(haloLayer, topBaseLayerId)
+        }
+    } else {
+        addLayerAbove(haloLayer, anchorLayerId)
+    }
+    addLayerAbove(symbolLayer, SELECTED_PHOTO_HALO_LAYER_ID)
 }
 
 private fun Style.recreateTripHeatmapLayer(featureCollection: FeatureCollection) {
@@ -387,11 +570,16 @@ private data class PhotoMapSourceKey(
 
 const val PHOTO_MAP_SOURCE_ID = "photo-map-source"
 const val PHOTO_THUMBNAIL_SOURCE_ID = "photo-thumbnail-source"
+const val PHOTO_HEATMAP_SOURCE_ID = "photo-heatmap-source"
+const val SELECTED_PHOTO_SOURCE_ID = "selected-photo-source"
 const val PHOTO_CLUSTER_LAYER_ID = "photo-cluster-layer"
 const val PHOTO_CLUSTER_THUMBNAIL_LAYER_ID = "photo-cluster-thumbnail-layer"
 const val PHOTO_CLUSTER_COUNT_LAYER_ID = "photo-cluster-count-layer"
 const val PHOTO_UNCLUSTERED_LAYER_ID = "photo-unclustered-layer"
 const val PHOTO_THUMBNAIL_LAYER_ID = "photo-thumbnail-layer"
+const val PHOTO_HEATMAP_LAYER_ID = "photo-heatmap-layer"
+const val SELECTED_PHOTO_HALO_LAYER_ID = "selected-photo-halo-layer"
+const val SELECTED_PHOTO_SYMBOL_LAYER_ID = "selected-photo-symbol-layer"
 const val TRIP_HEATMAP_SOURCE_ID = "trip-heatmap-source"
 const val TRIP_HEATMAP_LAYER_ID = "trip-heatmap-layer"
 
@@ -401,6 +589,11 @@ private val PhotoMapLayerIds = listOf(
     PHOTO_CLUSTER_COUNT_LAYER_ID,
     PHOTO_UNCLUSTERED_LAYER_ID,
     PHOTO_THUMBNAIL_LAYER_ID
+)
+
+private val SelectedPhotoLayerIds = listOf(
+    SELECTED_PHOTO_HALO_LAYER_ID,
+    SELECTED_PHOTO_SYMBOL_LAYER_ID
 )
 
 private const val PhotoMapLayerLogTag = "PhotoMapMap"

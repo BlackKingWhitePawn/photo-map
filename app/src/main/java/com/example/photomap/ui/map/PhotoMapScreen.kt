@@ -47,8 +47,8 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.FloatingActionButton
@@ -70,6 +70,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -100,6 +101,7 @@ import com.example.photomap.data.heatmap.heatResolutionForZoom
 import com.example.photomap.domain.model.DevicePhoto
 import com.example.photomap.domain.model.PhotoDateFilter
 import com.example.photomap.domain.model.photoDateDayToMillis
+import com.example.photomap.domain.model.photoDateMillis
 import com.example.photomap.ui.trips.TripMapCameraState
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -115,7 +117,9 @@ import kotlin.math.max
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -369,6 +373,7 @@ private fun PhotoMapLibreMap(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val composeDensity = LocalDensity.current
     val colorScheme = MaterialTheme.colorScheme
     val layerColors = PhotoMapLayerColors(
         clusterSmall = colorScheme.primary.toArgb(),
@@ -387,20 +392,30 @@ private fun PhotoMapLibreMap(
     var styleGeneration by remember { mutableStateOf(0) }
     var thumbnailRefreshKey by remember { mutableStateOf(0) }
     var cameraMoveRevision by remember { mutableStateOf(0) }
+    var photoHeatmapViewportRevision by remember { mutableStateOf(0) }
     val overlayTapBlockedUntilMs = remember { AtomicLong(0L) }
     val lastCameraMoveProjectionAtMs = remember { AtomicLong(0L) }
+    val photoHeatmapRequestCounter = remember { AtomicLong(0L) }
     var hasFitCamera by remember { mutableStateOf(false) }
     var bottomGalleryState by remember { mutableStateOf<BottomGalleryState?>(null) }
     var mapRenderState by remember { mutableStateOf<PhotoMapRenderState>(PhotoMapRenderState.Empty) }
+    var photoHeatmapState by remember { mutableStateOf(PhotoHeatmapRenderState.Empty) }
     var displayMode by remember { mutableStateOf(PhotoMapDisplayMode.Heatmap) }
+    val heatmapSelectionRadiiPx = remember(composeDensity) {
+        with(composeDensity) {
+            listOf(48.dp.toPx(), 64.dp.toPx(), 80.dp.toPx())
+        }
+    }
     val photosById = remember(photos) {
         photos.associateBy { photo -> photo.mediaId }
     }
+    val selectedGalleryPhoto = bottomGalleryState?.selectedPhoto
+    var selectedMarkerPoint by remember { mutableStateOf<SelectedPhotoMarkerPoint?>(null) }
     val latestPhotosById = rememberUpdatedState(photosById)
-    val latestTripHeatCells = rememberUpdatedState(tripHeatCells)
     val latestClusterSettings = rememberUpdatedState(clusterSettings)
     val latestDisplayMode = rememberUpdatedState(displayMode)
     val latestMapRenderState = rememberUpdatedState(mapRenderState)
+    val latestHeatmapSelectionRadiiPx = rememberUpdatedState(heatmapSelectionRadiiPx)
     val latestOnCameraStateChanged = rememberUpdatedState(onCameraStateChanged)
     val latestOnViewportChanged = rememberUpdatedState(onViewportChanged)
     val cameraPositions = remember(photos) {
@@ -435,6 +450,9 @@ private fun PhotoMapLibreMap(
                 mapLibreMap.addOnCameraMoveListener {
                     val now = SystemClock.uptimeMillis()
                     overlayTapBlockedUntilMs.set(now + MapGestureTapBlockMs)
+                    if (latestDisplayMode.value == PhotoMapDisplayMode.Heatmap && bottomGalleryState != null) {
+                        bottomGalleryState = null
+                    }
                     if (now - lastCameraMoveProjectionAtMs.get() >= MapMoveReprojectionThrottleMs) {
                         lastCameraMoveProjectionAtMs.set(now)
                         cameraMoveRevision += 1
@@ -450,6 +468,7 @@ private fun PhotoMapLibreMap(
                     lastCameraMoveProjectionAtMs.set(now)
                     lastHeatmapResolution.set(heatResolutionForZoom(mapLibreMap.cameraPosition.zoom).toLong())
                     thumbnailRefreshKey += 1
+                    photoHeatmapViewportRevision += 1
                     latestOnCameraStateChanged.value(mapLibreMap.toTripMapCameraState())
                     mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                 }
@@ -458,10 +477,10 @@ private fun PhotoMapLibreMap(
                         return@addOnMapClickListener true
                     }
                     if (latestDisplayMode.value != PhotoMapDisplayMode.Photos) {
-                        return@addOnMapClickListener mapLibreMap.handleTripHeatmapClick(
+                        return@addOnMapClickListener mapLibreMap.handlePhotoHeatmapClick(
                             point = point,
-                            heatCells = latestTripHeatCells.value,
                             photos = latestPhotosById.value.values,
+                            selectionRadiiPx = latestHeatmapSelectionRadiiPx.value,
                             onShowPhotos = { state -> bottomGalleryState = state }
                         )
                     }
@@ -493,6 +512,7 @@ private fun PhotoMapLibreMap(
                     isStyleReady = true
                     styleGeneration += 1
                     thumbnailRefreshKey += 1
+                    photoHeatmapViewportRevision += 1
                     post {
                         mapLibreMap.dispatchViewportChanged(latestOnViewportChanged.value)
                     }
@@ -530,6 +550,7 @@ private fun PhotoMapLibreMap(
         thumbnailRefreshKey,
         mapItems,
         tripHeatCells,
+        photoHeatmapState,
         photosById,
         clusterSettings,
         displayMode,
@@ -567,17 +588,145 @@ private fun PhotoMapLibreMap(
             style = style,
             featureCollection = TripHeatmapFeatureMapper.toFeatureCollection(tripHeatCells)
         )
+        layerController.updatePhotoHeatmap(
+            style = style,
+            featureCollection = photoHeatmapState.featureCollection
+        )
         layerController.setDisplayMode(style = style, mode = displayMode)
         val refreshMessage =
             "Map render refresh: photos=${photosById.size}, clusters=${renderState.clusterCount}, " +
                 "singles=${renderState.singleCount}, thumbnails=${renderState.thumbnailPhotoIds.size}, " +
-                "tripHeatCells=${tripHeatCells.size}, " +
+                "tripHeatCells=${tripHeatCells.size}, photoHeatCells=${photoHeatmapState.cells.size}, " +
                 "clusterThumbs=${renderState.clusterThumbnailRequests.size}, " +
                 "projected=${renderState.projectedPhotoCount}, baseRadius=${clusterSettings.radiusPx}, " +
                 "effectiveRadius=${renderState.effectiveClusterRadiusPx.roundToInt()}, " +
                 "zoom=${mapLibreMap.cameraPosition.zoom}, density=${clusterSettings.densityCoefficientPercent}%"
         Log.d(PhotoMapLogTag, refreshMessage)
         AppDiagnostics.record(PhotoMapLogTag, refreshMessage)
+    }
+
+    LaunchedEffect(
+        map,
+        isStyleReady,
+        styleGeneration,
+        photoHeatmapViewportRevision,
+        photos,
+        dateFilter,
+        displayMode,
+        composeDensity
+    ) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady || displayMode != PhotoMapDisplayMode.Heatmap) {
+            return@LaunchedEffect
+        }
+        val requestId = photoHeatmapRequestCounter.incrementAndGet()
+        delay(PhotoHeatmapDebounceMs)
+        if (mapView.width <= 0 || mapView.height <= 0) {
+            return@LaunchedEffect
+        }
+        val bounds = mapLibreMap.visiblePhotoMapBounds() ?: return@LaunchedEffect
+        val result = withContext(Dispatchers.Default) {
+            PhotoHeatmapFeatureMapper.build(
+                photos = photos,
+                request = PhotoHeatmapViewportRequest(
+                    requestId = requestId,
+                    zoom = mapLibreMap.cameraPosition.zoom,
+                    bounds = bounds,
+                    viewportWidthPx = mapView.width,
+                    viewportHeightPx = mapView.height,
+                    density = composeDensity.density,
+                    dateFilter = dateFilter
+                )
+            )
+        }
+        if (requestId != photoHeatmapRequestCounter.get()) {
+            return@LaunchedEffect
+        }
+        photoHeatmapState = result
+        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        layerController.updatePhotoHeatmap(
+            style = style,
+            featureCollection = result.featureCollection
+        )
+        layerController.setDisplayMode(style = style, mode = displayMode)
+        val message = "Photo heatmap refresh: request=$requestId, " +
+            "visible=${result.visiblePhotoCount}, cells=${result.cells.size}, " +
+            "zoom=${mapLibreMap.cameraPosition.zoom}"
+        Log.d(PhotoMapLogTag, message)
+        AppDiagnostics.record(PhotoMapLogTag, message)
+    }
+
+    LaunchedEffect(
+        map,
+        isStyleReady,
+        styleGeneration,
+        displayMode,
+        selectedGalleryPhoto?.mediaId
+    ) {
+        val mapLibreMap = map ?: return@LaunchedEffect
+        if (!isStyleReady) {
+            return@LaunchedEffect
+        }
+        val style = mapLibreMap.getStyle() ?: return@LaunchedEffect
+        val targetPoint = if (displayMode == PhotoMapDisplayMode.Heatmap) {
+            selectedGalleryPhoto?.toSelectedPhotoMarkerPoint()
+        } else {
+            null
+        }
+        if (targetPoint == null) {
+            selectedMarkerPoint = null
+            layerController.updateSelectedPhotoMarker(
+                style = style,
+                featureCollection = SelectedPhotoMarkerFeatureMapper.toFeatureCollection(null)
+            )
+            layerController.setDisplayMode(style = style, mode = displayMode)
+            return@LaunchedEffect
+        }
+
+        val startPoint = selectedMarkerPoint
+        if (startPoint == null ||
+            haversineDistanceKm(
+                firstLatitude = startPoint.latitude,
+                firstLongitude = startPoint.longitude,
+                secondLatitude = targetPoint.latitude,
+                secondLongitude = targetPoint.longitude
+            ) > SelectedPhotoMarkerMaxAnimatedDistanceKm
+        ) {
+            selectedMarkerPoint = targetPoint
+            layerController.updateSelectedPhotoMarker(
+                style = style,
+                featureCollection = SelectedPhotoMarkerFeatureMapper.toFeatureCollection(
+                    photoId = targetPoint.photoId,
+                    latitude = targetPoint.latitude,
+                    longitude = targetPoint.longitude
+                )
+            )
+            layerController.setDisplayMode(style = style, mode = displayMode)
+            return@LaunchedEffect
+        }
+
+        val startedAt = SystemClock.uptimeMillis()
+        do {
+            val elapsed = SystemClock.uptimeMillis() - startedAt
+            val fraction = (elapsed.toFloat() / SelectedPhotoMarkerAnimationMs)
+                .coerceIn(0f, 1f)
+            val latitude = startPoint.latitude + (targetPoint.latitude - startPoint.latitude) * fraction
+            val longitude = startPoint.longitude + (targetPoint.longitude - startPoint.longitude) * fraction
+            layerController.updateSelectedPhotoMarker(
+                style = style,
+                featureCollection = SelectedPhotoMarkerFeatureMapper.toFeatureCollection(
+                    photoId = targetPoint.photoId,
+                    latitude = latitude,
+                    longitude = longitude
+                )
+            )
+            layerController.setDisplayMode(style = style, mode = displayMode)
+            if (fraction >= 1f) {
+                break
+            }
+            delay(SelectedPhotoMarkerAnimationFrameMs)
+        } while (true)
+        selectedMarkerPoint = targetPoint
     }
 
     LaunchedEffect(
@@ -694,6 +843,10 @@ private fun PhotoMapLibreMap(
         }
     }
 
+    LaunchedEffect(dateFilter) {
+        bottomGalleryState = null
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -741,6 +894,9 @@ private fun PhotoMapLibreMap(
                 BottomPhotoGallery(
                     state = state,
                     onOpenPhoto = { photo -> context.openPhotoInDefaultGallery(photo) },
+                    onSelectedPhotoChanged = { photo ->
+                        bottomGalleryState = bottomGalleryState?.selectPhoto(photo.mediaId)
+                    },
                     onClose = { bottomGalleryState = null }
                 )
             }
@@ -1006,9 +1162,34 @@ private fun ClusterDebugPanel(
 private fun BottomPhotoGallery(
     state: BottomGalleryState,
     onOpenPhoto: (DevicePhoto) -> Unit,
+    onSelectedPhotoChanged: (DevicePhoto) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val pageByPhotoId = remember(state.allPhotoIds) {
+        state.allPhotoIds.withIndex().associate { (index, photoId) -> photoId to index }
+    }
+    val initialPage = remember(pageByPhotoId, state.selectedPhotoId) {
+        state.selectedPhotoId?.let { photoId -> pageByPhotoId[photoId] } ?: 0
+    }
+    val pagerState = rememberPagerState(
+        initialPage = initialPage,
+        pageCount = { state.photos.size }
+    )
+    LaunchedEffect(pageByPhotoId, state.selectedPhotoId) {
+        val selectedIndex = state.selectedPhotoId?.let { photoId -> pageByPhotoId[photoId] } ?: return@LaunchedEffect
+        if (selectedIndex != pagerState.currentPage) {
+            pagerState.scrollToPage(selectedIndex)
+        }
+    }
+    LaunchedEffect(pagerState, state.photos) {
+        snapshotFlow { pagerState.currentPage }
+            .distinctUntilChanged()
+            .collect { page ->
+                state.photos.getOrNull(page)?.let(onSelectedPhotoChanged)
+            }
+    }
+
     Card(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1035,30 +1216,37 @@ private fun BottomPhotoGallery(
                     )
                 }
             }
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(
-                    items = state.photos,
-                    key = { photo -> photo.mediaId }
-                ) { photo ->
-                    BottomPhotoThumbnail(
-                        photo = photo,
-                        onOpenPhoto = onOpenPhoto
-                    )
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 86.dp)
+            ) { page ->
+                val photo = state.photos.getOrNull(page)
+                if (photo != null) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        BottomPhotoThumbnail(
+                            photo = photo,
+                            selected = photo.mediaId == state.selectedPhoto?.mediaId,
+                            onOpenPhoto = onOpenPhoto
+                        )
+                    }
                 }
             }
 
-            val firstPhoto = state.photos.firstOrNull()
-            if (firstPhoto != null) {
+            val currentPhoto = state.selectedPhoto
+            if (currentPhoto != null) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = firstPhoto.displayName ?: "Фото ${firstPhoto.mediaId}",
+                        text = currentPhoto.displayName ?: "Фото ${currentPhoto.mediaId}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
                     Text(
-                        text = firstPhoto.dateTaken?.let { millis ->
+                        text = currentPhoto.dateTaken?.let { millis ->
                             DateFormat.getDateFormat(LocalContext.current).format(Date(millis))
                         } ?: "Дата съёмки неизвестна",
                         style = MaterialTheme.typography.bodySmall
@@ -1985,6 +2173,7 @@ private fun ClusterDensitySlider(
 @Composable
 private fun BottomPhotoThumbnail(
     photo: DevicePhoto,
+    selected: Boolean = false,
     onOpenPhoto: (DevicePhoto) -> Unit
 ) {
     val context = LocalContext.current
@@ -1998,22 +2187,35 @@ private fun BottomPhotoThumbnail(
         }
     }
 
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.tertiary
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
     if (thumbnail != null) {
-        Image(
-            bitmap = requireNotNull(thumbnail).asImageBitmap(),
-            contentDescription = photo.displayName,
-            contentScale = ContentScale.Crop,
+        Surface(
             modifier = Modifier
-                .size(76.dp)
-                .clickable { onOpenPhoto(photo) }
-        )
+                .size(80.dp)
+                .clickable { onOpenPhoto(photo) },
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(if (selected) 3.dp else 1.dp, borderColor),
+            shadowElevation = if (selected) 4.dp else 0.dp
+        ) {
+            Image(
+                bitmap = requireNotNull(thumbnail).asImageBitmap(),
+                contentDescription = photo.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     } else {
         Surface(
             modifier = Modifier
-                .size(76.dp)
+                .size(80.dp)
                 .clickable { onOpenPhoto(photo) },
             color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = MaterialTheme.shapes.small
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(if (selected) 3.dp else 1.dp, borderColor)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
@@ -2143,6 +2345,47 @@ private fun MapLibreMap.handleTripHeatmapClick(
         "Trip heatmap hit-test: h3=${cell.h3Index}, resolution=${cell.resolution}, photoId=${photo.mediaId}"
     )
     return true
+}
+
+private fun MapLibreMap.handlePhotoHeatmapClick(
+    point: LatLng,
+    photos: Collection<DevicePhoto>,
+    selectionRadiiPx: List<Float>,
+    onShowPhotos: (BottomGalleryState) -> Unit
+): Boolean {
+    selectionRadiiPx.forEach { radiusPx ->
+        val photoIds = photoIdsNearTap(
+            point = point,
+            photos = photos,
+            hitSlopPx = radiusPx,
+            maxResults = PhotoHeatmapSelectionMaxResults
+        )
+        if (photoIds.isNotEmpty()) {
+            val photosById = photos.associateBy { photo -> photo.mediaId }
+            val state = bottomHeatmapTimelineGalleryState(
+                selectedPhotoId = photoIds.first(),
+                nearbyPhotoCount = photoIds.distinct().size,
+                photos = photos,
+                photosById = photosById
+            ) ?: return false
+            onShowPhotos(state)
+            Log.d(
+                PhotoMapLogTag,
+                "Photo heatmap hit-test: radius=$radiusPx, photos=${photoIds.distinct().size}, " +
+                    "selected=${photoIds.firstOrNull()}"
+            )
+            AppDiagnostics.record(
+                PhotoMapLogTag,
+                "Photo heatmap hit-test: radius=$radiusPx, photos=${photoIds.distinct().size}, " +
+                    "selected=${photoIds.firstOrNull()}"
+            )
+            return true
+        }
+    }
+
+    Log.d(PhotoMapLogTag, "Photo heatmap hit-test: photos=0")
+    AppDiagnostics.record(PhotoMapLogTag, "Photo heatmap hit-test: photos=0")
+    return false
 }
 
 private fun MapLibreMap.tripHeatCellNearTap(
@@ -2330,6 +2573,9 @@ private fun MapLibreMap.photoIdsNearTap(
         photos.asSequence()
             .mapNotNull { photo ->
                 val photoPoint = photo.toMapPoint() ?: return@mapNotNull null
+                if (photoPoint.latitude == 0.0 && photoPoint.longitude == 0.0) {
+                    return@mapNotNull null
+                }
                 val projected = projection.toScreenLocation(LatLng(photoPoint.latitude, photoPoint.longitude))
                 val dx = projected.x - screenPoint.x
                 val dy = projected.y - screenPoint.y
@@ -2378,7 +2624,8 @@ private fun markerOffset(
 private fun bottomGalleryStateForPhotoIds(
     photoIds: List<Long>,
     photosById: Map<Long, DevicePhoto>,
-    zoomTarget: BottomGalleryZoomTarget?
+    zoomTarget: BottomGalleryZoomTarget?,
+    selectedPhotoId: Long? = null
 ): BottomGalleryState? {
     val availablePhotoIds = photoIds.distinct().filter { photoId -> photosById.containsKey(photoId) }
     if (availablePhotoIds.isEmpty()) {
@@ -2390,7 +2637,38 @@ private fun bottomGalleryStateForPhotoIds(
             .mapNotNull { photoId -> photosById[photoId] },
         totalCount = availablePhotoIds.size,
         allPhotoIds = availablePhotoIds,
-        zoomTarget = zoomTarget
+        zoomTarget = zoomTarget,
+        selectedPhotoId = selectedPhotoId?.takeIf { photoId -> photoId in availablePhotoIds } ?: availablePhotoIds.first()
+    )
+}
+
+private fun bottomHeatmapTimelineGalleryState(
+    selectedPhotoId: Long,
+    nearbyPhotoCount: Int,
+    photos: Collection<DevicePhoto>,
+    photosById: Map<Long, DevicePhoto>
+): BottomGalleryState? {
+    if (photosById[selectedPhotoId] == null) {
+        return null
+    }
+    val timelinePhotos = photos.asSequence()
+        .filter { photo -> photo.toSelectedPhotoMarkerPoint() != null }
+        .sortedWith(
+            compareByDescending<DevicePhoto> { photo -> photo.photoDateMillis() ?: 0L }
+                .thenByDescending { photo -> photo.mediaId }
+        )
+        .toList()
+    if (timelinePhotos.isEmpty()) {
+        return null
+    }
+    val timelinePhotoIds = timelinePhotos.map { photo -> photo.mediaId }
+    return BottomGalleryState(
+        photos = timelinePhotos,
+        totalCount = timelinePhotoIds.size,
+        allPhotoIds = timelinePhotoIds,
+        zoomTarget = null,
+        selectedPhotoId = selectedPhotoId,
+        titleOverride = "Рядом: $nearbyPhotoCount · лента: ${timelinePhotoIds.size}"
     )
 }
 
@@ -3164,6 +3442,12 @@ private data class VisiblePhotoCandidate(
     val distanceFromCenter: Float
 )
 
+private data class SelectedPhotoMarkerPoint(
+    val photoId: Long,
+    val latitude: Double,
+    val longitude: Double
+)
+
 private data class TripHeatmapPhotoCandidate(
     val photo: DevicePhoto,
     val distanceKm: Double
@@ -3409,6 +3693,18 @@ private fun PhotoMapRenderItem.isCenterInsideViewport(
         screenY in 0f..viewportHeight.toFloat()
 }
 
+private fun DevicePhoto.toSelectedPhotoMarkerPoint(): SelectedPhotoMarkerPoint? {
+    val point = toMapPoint() ?: return null
+    if (point.latitude == 0.0 && point.longitude == 0.0) {
+        return null
+    }
+    return SelectedPhotoMarkerPoint(
+        photoId = mediaId,
+        latitude = point.latitude,
+        longitude = point.longitude
+    )
+}
+
 private fun haversineDistanceKm(
     firstLatitude: Double,
     firstLongitude: Double,
@@ -3524,26 +3820,37 @@ private fun MapLibreMap.dispatchViewportChanged(
     onViewportChanged: (PhotoMapBounds, Double) -> Unit
 ) {
     runCatching {
+        visiblePhotoMapBounds()?.let { bounds ->
+            onViewportChanged(bounds, cameraPosition.zoom)
+        }
+    }.onFailure { error ->
+        Log.w(PhotoMapLogTag, "Failed to dispatch map viewport", error)
+        AppDiagnostics.record(PhotoMapLogTag, "Failed to dispatch map viewport", error)
+    }
+}
+
+private fun MapLibreMap.visiblePhotoMapBounds(): PhotoMapBounds? {
+    return runCatching {
         val visibleRegion = projection.visibleRegion
         val points = listOf(
             visibleRegion.nearLeft,
             visibleRegion.nearRight,
             visibleRegion.farLeft,
             visibleRegion.farRight
-        )
-        onViewportChanged(
-            PhotoMapBounds(
-                south = points.minOf { point -> point!!.latitude },
-                west = points.minOf { point -> point!!.longitude },
-                north = points.maxOf { point -> point!!.latitude },
-                east = points.maxOf { point -> point!!.longitude }
-            ),
-            cameraPosition.zoom
+        ).filterNotNull()
+        if (points.isEmpty()) {
+            return@runCatching null
+        }
+        PhotoMapBounds(
+            south = points.minOf { point -> point.latitude },
+            west = points.minOf { point -> point.longitude },
+            north = points.maxOf { point -> point.latitude },
+            east = points.maxOf { point -> point.longitude }
         )
     }.onFailure { error ->
-        Log.w(PhotoMapLogTag, "Failed to dispatch map viewport", error)
-        AppDiagnostics.record(PhotoMapLogTag, "Failed to dispatch map viewport", error)
-    }
+        Log.w(PhotoMapLogTag, "Failed to read map viewport bounds", error)
+        AppDiagnostics.record(PhotoMapLogTag, "Failed to read map viewport bounds", error)
+    }.getOrNull()
 }
 
 private fun MapLibreMap.toTripMapCameraState(): TripMapCameraState {
@@ -3638,10 +3945,16 @@ private data class BottomGalleryState(
     val totalCount: Int,
     val allPhotoIds: List<Long>,
     val zoomTarget: BottomGalleryZoomTarget?,
+    val selectedPhotoId: Long? = photos.firstOrNull()?.mediaId,
     val titleOverride: String? = null
 ) {
     val canLoadMore: Boolean
         get() = photos.size < totalCount
+
+    val selectedPhoto: DevicePhoto?
+        get() = selectedPhotoId?.let { photoId ->
+            photos.firstOrNull { photo -> photo.mediaId == photoId }
+        } ?: photos.firstOrNull()
 
     val title: String
         get() = titleOverride ?: when {
@@ -3650,6 +3963,14 @@ private data class BottomGalleryState(
             photos.size == 1 -> "Фотография"
             else -> "Фотографий: ${photos.size}"
         }
+
+    fun selectPhoto(photoId: Long): BottomGalleryState {
+        return if (photoId in allPhotoIds) {
+            copy(selectedPhotoId = photoId)
+        } else {
+            this
+        }
+    }
 }
 
 private data class BottomGalleryZoomTarget(
@@ -3661,11 +3982,16 @@ private data class BottomGalleryZoomTarget(
 private const val MapBoundsPaddingPx = 120
 private const val MapPlaceFocusBoundsPaddingPx = 84
 private const val MapViewportRefreshDelayMs = 350L
+private const val PhotoHeatmapDebounceMs = 220L
 private const val MapGestureTapBlockMs = 450L
 private const val MapMoveReprojectionThrottleMs = 32L
 private const val InitialSinglePhotoZoom = 14.0
 private const val PlaceFocusSinglePhotoZoom = 15.0
 private const val MapTapHitSlopPx = 84f
+private const val PhotoHeatmapSelectionMaxResults = 300
+private const val SelectedPhotoMarkerAnimationMs = 190L
+private const val SelectedPhotoMarkerAnimationFrameMs = 16L
+private const val SelectedPhotoMarkerMaxAnimatedDistanceKm = 8.0
 private const val BottomGalleryThumbnailPx = 160
 private const val MapOverlayThumbnailPx = 96
 private const val MapThumbnailWidthDp = 56f
